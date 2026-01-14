@@ -1,0 +1,6 @@
+
+
+> ai-sdk-volcengine-adapter@0.1.0 build /Users/zhangzimin/Documents/sweetRetry/mermaid-chat/packages/ai-sdk-volcengine-adapter
+> swc src -d dist --config-file .swcrc --ignore '**/*.test.ts' --strip-leading-paths && tsc -p tsconfig.build.json
+
+Successfully compiled: 15 files with swc (62.67ms)
