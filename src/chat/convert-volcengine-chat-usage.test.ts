@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { convertVolcengineUsage, VolcengineUsage } from "./convert-volcengine-usage"
+import { convertVolcengineUsage, VolcengineUsage } from "./convert-volcengine-chat-usage"
 
 describe("convertVolcengineUsage", () => {
   describe("null/undefined handling", () => {

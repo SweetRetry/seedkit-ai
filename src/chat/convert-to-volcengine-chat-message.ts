@@ -59,6 +59,40 @@ export function convertToVolcengineChatMessages(
                     video_url: { url: formatDataUrl(data, mediaType) }
                   };
                 }
+                if (mediaType === "application/pdf") {
+                  // URL format
+                  if (data instanceof URL) {
+                    return {
+                      type: "input_file",
+                      file_url: data.toString()
+                    };
+                  }
+                  // String: could be URL or base64
+                  if (typeof data === "string") {
+                    // Check if it's a URL (http/https) or data URL
+                    if (data.startsWith("http://") || data.startsWith("https://")) {
+                      return {
+                        type: "input_file",
+                        file_url: data
+                      };
+                    }
+                    // Base64 string or data URL
+                    const base64Data = data.startsWith("data:")
+                      ? data
+                      : `data:application/pdf;base64,${data}`;
+                    return {
+                      type: "input_file",
+                      file_data: base64Data,
+                      filename: part.filename ?? "document.pdf"
+                    };
+                  }
+                  // Uint8Array: convert to base64
+                  return {
+                    type: "input_file",
+                    file_data: `data:application/pdf;base64,${convertToBase64(data)}`,
+                    filename: part.filename ?? "document.pdf"
+                  };
+                }
                 throw new UnsupportedFunctionalityError({
                   functionality: `File type: ${mediaType}`
                 });

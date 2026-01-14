@@ -1,7 +1,7 @@
 
 
+import { lazySchema, zodSchema } from "@ai-sdk/provider-utils";
 import { z } from "zod";
-
 
 export type VolcengineModelId =
     | 'doubao-seed-1-8-251228'
@@ -12,7 +12,7 @@ export type VolcengineModelId =
     | (string & {});
 
 
-export const volcengineChatOptions = z.object({
+const volcengineChatOptionsSchema = z.object({
     /**
      * Whether to use structured outputs.
      *
@@ -44,5 +44,8 @@ export const volcengineChatOptions = z.object({
     thinking: z.boolean().optional(),
 });
 
+export const volcengineChatOptions = lazySchema(
+    () => zodSchema(volcengineChatOptionsSchema)
+);
 
-export type VolcengineChatOptions = z.infer<typeof volcengineChatOptions>;
+export type VolcengineChatOptions = z.infer<typeof volcengineChatOptionsSchema>;

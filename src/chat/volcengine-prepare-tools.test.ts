@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { prepareTools } from './volcengine-prepare-tools';
+import { prepareTools, VolcengineTool } from './volcengine-prepare-tools';
+
+type VolcengineFunctionTool = Extract<VolcengineTool, { type: 'function' }>;
 
 describe('prepareTools', () => {
   describe('tools handling', () => {
-    it('should return undefined tools when tools is undefined', () => {
-      const result = prepareTools({
+    it('should return undefined tools when tools is undefined', async () => {
+      const result = await prepareTools({
         tools: undefined,
         toolChoice: undefined,
       });
@@ -16,8 +18,8 @@ describe('prepareTools', () => {
       });
     });
 
-    it('should return undefined tools when tools array is empty', () => {
-      const result = prepareTools({
+    it('should return undefined tools when tools array is empty', async () => {
+      const result = await prepareTools({
         tools: [],
         toolChoice: undefined,
       });
@@ -29,8 +31,8 @@ describe('prepareTools', () => {
       });
     });
 
-    it('should convert function tools to Volcengine format', () => {
-      const result = prepareTools({
+    it('should convert function tools to Volcengine format', async () => {
+      const result = await prepareTools({
         tools: [
           {
             type: 'function',
@@ -67,8 +69,8 @@ describe('prepareTools', () => {
       expect(result.toolWarnings).toEqual([]);
     });
 
-    it('should handle tools without description', () => {
-      const result = prepareTools({
+    it('should handle tools without description', async () => {
+      const result = await prepareTools({
         tools: [
           {
             type: 'function',
@@ -92,8 +94,8 @@ describe('prepareTools', () => {
       ]);
     });
 
-    it('should emit warning for provider-defined tools', () => {
-      const result = prepareTools({
+    it('should emit warning for provider-defined tools', async () => {
+      const result = await prepareTools({
         tools: [
           {
             type: 'provider',
@@ -112,8 +114,8 @@ describe('prepareTools', () => {
       ]);
     });
 
-    it('should handle mixed tools (function and provider)', () => {
-      const result = prepareTools({
+    it('should handle mixed tools (function and provider)', async () => {
+      const result = await prepareTools({
         tools: [
           {
             type: 'function',
@@ -136,8 +138,8 @@ describe('prepareTools', () => {
       });
 
       expect(result.tools).toHaveLength(2);
-      expect(result.tools![0].function.name).toBe('valid_tool');
-      expect(result.tools![1].function.name).toBe('another_valid_tool');
+      expect((result.tools![0] as VolcengineFunctionTool).function.name).toBe('valid_tool');
+      expect((result.tools![1] as VolcengineFunctionTool).function.name).toBe('another_valid_tool');
       expect(result.toolWarnings).toEqual([
         {
           type: 'unsupported',
@@ -146,8 +148,8 @@ describe('prepareTools', () => {
       ]);
     });
 
-    it('should convert multiple function tools', () => {
-      const result = prepareTools({
+    it('should convert multiple function tools', async () => {
+      const result = await prepareTools({
         tools: [
           {
             type: 'function',
@@ -181,8 +183,8 @@ describe('prepareTools', () => {
       },
     ];
 
-    it('should return undefined toolChoice when not specified', () => {
-      const result = prepareTools({
+    it('should return undefined toolChoice when not specified', async () => {
+      const result = await prepareTools({
         tools: sampleTools,
         toolChoice: undefined,
       });
@@ -190,8 +192,8 @@ describe('prepareTools', () => {
       expect(result.toolChoice).toBeUndefined();
     });
 
-    it('should pass through "auto" toolChoice', () => {
-      const result = prepareTools({
+    it('should pass through "auto" toolChoice', async () => {
+      const result = await prepareTools({
         tools: sampleTools,
         toolChoice: { type: 'auto' },
       });
@@ -199,8 +201,8 @@ describe('prepareTools', () => {
       expect(result.toolChoice).toBe('auto');
     });
 
-    it('should pass through "none" toolChoice', () => {
-      const result = prepareTools({
+    it('should pass through "none" toolChoice', async () => {
+      const result = await prepareTools({
         tools: sampleTools,
         toolChoice: { type: 'none' },
       });
@@ -208,8 +210,8 @@ describe('prepareTools', () => {
       expect(result.toolChoice).toBe('none');
     });
 
-    it('should convert "required" toolChoice', () => {
-      const result = prepareTools({
+    it('should convert "required" toolChoice', async () => {
+      const result = await prepareTools({
         tools: sampleTools,
         toolChoice: { type: 'required' },
       });
@@ -217,8 +219,8 @@ describe('prepareTools', () => {
       expect(result.toolChoice).toBe('required');
     });
 
-    it('should convert specific tool choice to function format', () => {
-      const result = prepareTools({
+    it('should convert specific tool choice to function format', async () => {
+      const result = await prepareTools({
         tools: sampleTools,
         toolChoice: { type: 'tool', toolName: 'sample_tool' },
       });
@@ -229,8 +231,8 @@ describe('prepareTools', () => {
       });
     });
 
-    it('should handle tool choice for non-existent tool name', () => {
-      const result = prepareTools({
+    it('should handle tool choice for non-existent tool name', async () => {
+      const result = await prepareTools({
         tools: sampleTools,
         toolChoice: { type: 'tool', toolName: 'non_existent_tool' },
       });
@@ -243,7 +245,7 @@ describe('prepareTools', () => {
   });
 
   describe('edge cases', () => {
-    it('should handle complex input schema', () => {
+    it('should handle complex input schema', async () => {
       const complexSchema = {
         type: 'object',
         properties: {
@@ -261,7 +263,7 @@ describe('prepareTools', () => {
         required: ['nested'],
       };
 
-      const result = prepareTools({
+      const result = await prepareTools({
         tools: [
           {
             type: 'function',
@@ -273,11 +275,11 @@ describe('prepareTools', () => {
         toolChoice: undefined,
       });
 
-      expect(result.tools![0].function.parameters).toEqual(complexSchema);
+      expect((result.tools![0] as VolcengineFunctionTool).function.parameters).toEqual(complexSchema);
     });
 
-    it('should preserve all tool properties in output', () => {
-      const result = prepareTools({
+    it('should preserve all tool properties in output', async () => {
+      const result = await prepareTools({
         tools: [
           {
             type: 'function',

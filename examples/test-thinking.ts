@@ -1,19 +1,23 @@
 import { config } from "dotenv";
 import { createVolcengine } from "ai-sdk-volcengine-adapter";
 import { generateText, streamText } from "ai";
-import { writeFileSync, appendFileSync } from "fs";
+import { writeFileSync, appendFileSync, mkdirSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
 // 加载 .env.local 文件
 config({ path: ".env.local" });
 
-const OUTPUT_FILE = "test-thinking-output.txt";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const OUTPUT_DIR = join(__dirname, "output");
+mkdirSync(OUTPUT_DIR, { recursive: true });
+const OUTPUT_FILE = join(OUTPUT_DIR, "test-thinking-output.txt");
 
 const volcengine = createVolcengine({
   apiKey: process.env.ARK_API_KEY,
 });
 
-// 使用支持 thinking 的模型
-const model = volcengine("doubao-seed-1-8-251228");
+
 
 function log(message: string) {
   console.log(message);
@@ -31,7 +35,7 @@ async function testThinkingStream() {
 
   try {
     const result = streamText({
-      model,
+      model: volcengine("doubao-seed-1-8-251228"),
       prompt: "解释为什么天空是蓝色的？",
       providerOptions: {
         volcengine: {
@@ -82,7 +86,7 @@ async function testThinkingDisabledGenerate() {
 
   try {
     const result = await generateText({
-      model,
+      model: volcengine("doubao-seed-1-8-251228"),
       prompt: "计算 5 + 3 等于多少？",
       providerOptions: {
         volcengine: {
@@ -125,7 +129,7 @@ async function testThinkingDisabledStream() {
 
   try {
     const result = streamText({
-      model,
+      model: volcengine("doubao-seed-1-8-251228"),
       prompt: "1 + 1 等于多少？",
       providerOptions: {
         volcengine: {

@@ -1,4 +1,5 @@
 import {
+  ImageModelV3,
   LanguageModelV3,
   NoSuchModelError,
   ProviderV3
@@ -10,8 +11,9 @@ import {
   withoutTrailingSlash
 } from "@ai-sdk/provider-utils";
 import { VERSION } from "./version";
-import { VolcengineChatLanguageModel } from "./volcengine-chat-language-model";
-import { VolcengineModelId } from "./volcengine-chat-options";
+import { VolcengineChatLanguageModel, VolcengineModelId } from "./chat";
+import { VolcengineImageModel, VolcengineImageModelId } from "./image";
+import { volcengineTools } from "./volcengine-tools";
 
 export interface VolcengineProviderSettings {
   /**
@@ -54,9 +56,22 @@ Creates a model for text generation using the Chat Completions API.
   chat(modelId: VolcengineModelId): LanguageModelV3;
 
   /**
+Creates a model for image generation.
+*/
+  imageModel(
+    modelId: VolcengineImageModelId,
+
+  ): ImageModelV3;
+
+  /**
 Creates a model for text embeddings.
 */
   embeddingModel(modelId: VolcengineModelId): never;
+
+  /**
+Volcengine-specific tools.
+*/
+  tools: typeof volcengineTools;
 }
 
 /**
@@ -84,35 +99,37 @@ export function createVolcengine(
 
   const createChatModel = (modelId: string) =>
     new VolcengineChatLanguageModel(modelId, {
-      provider: "volcengine",
+      provider: "volcengine.chat",
       baseURL,
       headers: getHeaders,
       fetch: options.fetch,
       generateId: options.generateId
     });
 
-  return Object.assign(
-    (modelId: string) => {
-      if (new.target) {
-        throw new Error(
-          "The Volcengine model function cannot be called with the new keyword."
-        );
-      }
+  const createImageModel = (
+    modelId: string,
+  ) =>
+    new VolcengineImageModel(modelId, {
+      provider: "volcengine.image",
+      baseURL,
+      headers: getHeaders,
+      fetch: options.fetch
+    });
 
-      return createChatModel(modelId);
-    },
-    {
-      specificationVersion: "v3" as const,
-      languageModel: createChatModel,
-      chat: createChatModel,
-      embeddingModel: (modelId: string) => {
-        throw new NoSuchModelError({ modelId, modelType: "embeddingModel" });
-      },
-      imageModel: (modelId: string) => {
-        throw new NoSuchModelError({ modelId, modelType: "imageModel" });
-      }
-    }
-  ) as VolcengineProvider;
+  const provider = function (modelId: VolcengineModelId) {
+    return createChatModel(modelId);
+  };
+
+  provider.specificationVersion = "v3" as const;
+  provider.languageModel = createChatModel;
+  provider.chat = createChatModel;
+  provider.imageModel = createImageModel;
+  provider.embeddingModel = (modelId: string) => {
+    throw new NoSuchModelError({ modelId, modelType: "embeddingModel" });
+  };
+  provider.tools = volcengineTools;
+
+  return provider as VolcengineProvider;
 }
 
 /**

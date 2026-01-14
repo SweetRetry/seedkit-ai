@@ -134,6 +134,118 @@ describe("convertToVolcengineChatMessages", () => {
       ]);
     });
 
+    it("should convert PDF file with URL string", () => {
+      const result = convertToVolcengineChatMessages([
+        {
+          role: "user",
+          content: [
+            {
+              type: "file",
+              data: "https://example.com/doc.pdf",
+              mediaType: "application/pdf"
+            }
+          ]
+        }
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              file_url: "https://example.com/doc.pdf"
+            }
+          ]
+        }
+      ]);
+    });
+
+    it("should convert PDF file with URL object", () => {
+      const result = convertToVolcengineChatMessages([
+        {
+          role: "user",
+          content: [
+            {
+              type: "file",
+              data: new URL("https://example.com/doc.pdf"),
+              mediaType: "application/pdf"
+            }
+          ]
+        }
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              file_url: "https://example.com/doc.pdf"
+            }
+          ]
+        }
+      ]);
+    });
+
+    it("should convert PDF file with base64 string", () => {
+      const result = convertToVolcengineChatMessages([
+        {
+          role: "user",
+          content: [
+            {
+              type: "file",
+              data: "JVBERi0xLjQ=",
+              mediaType: "application/pdf",
+              filename: "test.pdf"
+            }
+          ]
+        }
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              file_data: "data:application/pdf;base64,JVBERi0xLjQ=",
+              filename: "test.pdf"
+            }
+          ]
+        }
+      ]);
+    });
+
+    it("should convert PDF file with Uint8Array", () => {
+      const pdfData = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // %PDF
+      const result = convertToVolcengineChatMessages([
+        {
+          role: "user",
+          content: [
+            {
+              type: "file",
+              data: pdfData,
+              mediaType: "application/pdf"
+            }
+          ]
+        }
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              file_data: "data:application/pdf;base64,JVBERg==",
+              filename: "document.pdf"
+            }
+          ]
+        }
+      ]);
+    });
+
     it("should throw error for unsupported file type", () => {
       expect(() =>
         convertToVolcengineChatMessages([
@@ -143,12 +255,12 @@ describe("convertToVolcengineChatMessages", () => {
               {
                 type: "file",
                 data: "data",
-                mediaType: "application/pdf"
+                mediaType: "application/octet-stream"
               }
             ]
           }
         ])
-      ).toThrow("File type: application/pdf");
+      ).toThrow("File type: application/octet-stream");
     });
   });
 

@@ -18,15 +18,16 @@ import {
   createJsonResponseHandler,
   generateId,
   injectJsonInstructionIntoMessages,
+  parseProviderOptions,
   postJsonToApi,
   removeUndefinedEntries,
 } from "@ai-sdk/provider-utils"
 import { z } from "zod"
 import { convertToVolcengineChatMessages } from "./convert-to-volcengine-chat-message"
-import { convertVolcengineUsage } from "./convert-volcengine-usage"
+import { convertVolcengineUsage } from "./convert-volcengine-chat-usage"
 import { getResponseMetadata } from "./get-response-metadata"
 import { mapVolcengineFinishReason } from "./map-volcengine-finish-reason"
-import { volcengineChatOptions } from "./volcengine-chat-options"
+import { volcengineChatOptions, VolcengineChatOptions } from "./volcengine-chat-options"
 import { volcengineFailedResponseHandler } from "./volcengine-error"
 import { prepareTools } from "./volcengine-prepare-tools"
 
@@ -139,7 +140,7 @@ export class VolcengineChatLanguageModel implements LanguageModelV3 {
     this.generateId = config.generateId ?? generateId
   }
 
-  private getArgs({
+  private async getArgs({
     responseFormat,
     prompt,
     maxOutputTokens,
@@ -155,16 +156,14 @@ export class VolcengineChatLanguageModel implements LanguageModelV3 {
     providerOptions,
   }: LanguageModelV3CallOptions) {
     const warnings: SharedV3Warning[] = []
-    const volcengineOptions = volcengineChatOptions.safeParse(providerOptions?.volcengine ?? {})
 
-    if (!volcengineOptions.success) {
-      warnings.push({
-        type: "other",
-        message: `Invalid provider options: ${volcengineOptions.error.message}`,
-      })
-    }
-
-    const options = volcengineOptions.success ? volcengineOptions.data : {}
+    // Parse provider options
+    const options =
+      (await parseProviderOptions<VolcengineChatOptions>({
+        provider: "volcengine",
+        providerOptions,
+        schema: volcengineChatOptions,
+      })) ?? {}
 
     // Unsupported features warnings
     if (topK != null) {
@@ -226,7 +225,7 @@ export class VolcengineChatLanguageModel implements LanguageModelV3 {
       tools: volcengineTools,
       toolChoice: volcengineToolChoice,
       toolWarnings,
-    } = prepareTools({ tools, toolChoice })
+    } = await prepareTools({ tools, toolChoice })
 
     // Convert boolean thinking option to Volcengine API format
     const thinkingConfig =
@@ -255,7 +254,7 @@ export class VolcengineChatLanguageModel implements LanguageModelV3 {
   }
 
   async doGenerate(options: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> {
-    const { args, warnings } = this.getArgs(options)
+    const { args, warnings } = await this.getArgs(options)
 
     const { value: response, responseHeaders } = await postJsonToApi({
       url: `${this.config.baseURL}/chat/completions`,
@@ -299,7 +298,7 @@ export class VolcengineChatLanguageModel implements LanguageModelV3 {
   }
 
   async doStream(options: LanguageModelV3CallOptions): Promise<LanguageModelV3StreamResult> {
-    const { args, warnings } = this.getArgs(options)
+    const { args, warnings } = await this.getArgs(options)
 
     const { value: eventStream, responseHeaders } = await postJsonToApi({
       url: `${this.config.baseURL}/chat/completions`,
