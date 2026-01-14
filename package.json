@@ -4,6 +4,14 @@
   "description": "Volcengine adapter for AI SDK",
   "license": "MIT",
   "author": "SweetRetry <zimin.zhang2000@gmail.com>",
+  "homepage": "https://github.com/SweetRetry/ai-sdk-volcengine-adapter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SweetRetry/ai-sdk-volcengine-adapter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SweetRetry/ai-sdk-volcengine-adapter/issues"
+  },
   "keywords": [
     "ai",
     "ai-sdk",
