@@ -2,12 +2,12 @@ import {
   createProviderToolFactoryWithOutputSchema,
   lazySchema,
   zodSchema,
-} from "@ai-sdk/provider-utils";
-import { z } from "zod/v4";
+} from '@ai-sdk/provider-utils';
+import { z } from 'zod/v4';
 
 const userLocationSchema = z
   .object({
-    type: z.enum(["approximate"]).optional(),
+    type: z.enum(['approximate']).optional(),
     country: z.string().optional(),
     region: z.string().optional(),
     city: z.string().optional(),
@@ -24,14 +24,14 @@ export const webSearchArgsSchema = lazySchema(() =>
         sources: z.array(z.string()).optional(),
         userLocation: userLocationSchema.optional(),
       })
-      .strict()
-  )
+      .strict(),
+  ),
 );
 
 const webSearchInputSchema = lazySchema(() => zodSchema(z.object({})));
 
 export const webSearchOutputSchema = lazySchema(() =>
-  zodSchema(z.object({ result: z.string() }))
+  zodSchema(z.object({ result: z.string() })),
 );
 
 /**
@@ -68,7 +68,7 @@ export interface WebSearchArgs {
      * Location type.
      * @default "approximate"
      */
-    type?: "approximate";
+    type?: 'approximate';
     /**
      * Country name (e.g., "中国").
      */
@@ -94,7 +94,7 @@ const webSearchToolFactory = createProviderToolFactoryWithOutputSchema<
   },
   WebSearchArgs
 >({
-  id: "volcengine.web_search",
+  id: 'volcengine.web_search',
   inputSchema: webSearchInputSchema,
   outputSchema: webSearchOutputSchema,
 });

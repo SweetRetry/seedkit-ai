@@ -1,4 +1,4 @@
-import { webSearch } from "./tool/web-search";
+import { webSearch } from './tool/web-search';
 
 /**
  * Volcengine provider tools.

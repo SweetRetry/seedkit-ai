@@ -5,21 +5,20 @@ import {
   ImageModelV3ProviderMetadata,
   ImageModelV3Usage,
   SharedV3Warning,
-} from "@ai-sdk/provider";
+} from '@ai-sdk/provider';
 import {
   FetchFunction,
   combineHeaders,
   createJsonResponseHandler,
   postJsonToApi,
-} from "@ai-sdk/provider-utils";
-import { volcengineFailedResponseHandler } from "../chat/volcengine-error";
-import { volcengineImageResponseSchema } from "./volcengine-image-api";
+} from '@ai-sdk/provider-utils';
+import { volcengineFailedResponseHandler } from '../chat/volcengine-error';
+import { volcengineImageResponseSchema } from './volcengine-image-api';
 
 export type VolcengineImageModelId =
-  | "doubao-seedream-4-5-251128"
-  | "doubao-seedream-4-0-250828"
+  | 'doubao-seedream-4-5-251128'
+  | 'doubao-seedream-4-0-250828'
   | (string & {});
-
 
 export interface VolcengineImageConfig {
   provider: string;
@@ -29,9 +28,7 @@ export interface VolcengineImageConfig {
 }
 
 export class VolcengineImageModel implements ImageModelV3 {
-  readonly specificationVersion = "v3" as const;
-
-
+  readonly specificationVersion = 'v3' as const;
 
   get maxImagesPerCall(): number {
     return 1;
@@ -41,16 +38,13 @@ export class VolcengineImageModel implements ImageModelV3 {
     return this.config.provider;
   }
 
-
-
-
   constructor(
     readonly modelId: VolcengineImageModelId,
     private readonly config: VolcengineImageConfig,
-  ) { }
+  ) {}
 
-
-  async doGenerate({ prompt,
+  async doGenerate({
+    prompt,
     files,
     size,
     aspectRatio,
@@ -74,15 +68,15 @@ export class VolcengineImageModel implements ImageModelV3 {
     // Handle unsupported options
     if (aspectRatio != null) {
       warnings.push({
-        type: "unsupported",
-        feature: "aspectRatio",
+        type: 'unsupported',
+        feature: 'aspectRatio',
       });
     }
 
     if (seed != null) {
       warnings.push({
-        type: "unsupported",
-        feature: "seed",
+        type: 'unsupported',
+        feature: 'seed',
       });
     }
 
@@ -90,16 +84,14 @@ export class VolcengineImageModel implements ImageModelV3 {
     const body: Record<string, unknown> = {
       model: this.modelId,
       prompt,
-      size: size ?? "1024x1024",
-      response_format: "b64_json",
+      size: size ?? '1024x1024',
+      response_format: 'b64_json',
       ...(providerOptions.volcengine ?? {}),
     };
 
     // Handle reference images for image-to-image generation
     if (files && files.length > 0) {
-      const imageUrls = files.map((file) =>
-        this.convertFileToDataUrl(file)
-      );
+      const imageUrls = files.map(file => this.convertFileToDataUrl(file));
 
       if (imageUrls.length === 1) {
         body.image = imageUrls[0];
@@ -114,21 +106,21 @@ export class VolcengineImageModel implements ImageModelV3 {
       body,
       failedResponseHandler: volcengineFailedResponseHandler,
       successfulResponseHandler: createJsonResponseHandler(
-        volcengineImageResponseSchema
+        volcengineImageResponseSchema,
       ),
       abortSignal,
       fetch: this.config.fetch,
     });
 
     // Extract images from response
-    const images: string[] = response.data.map((item) => {
+    const images: string[] = response.data.map(item => {
       if (item.b64_json) {
         return item.b64_json;
       }
       if (item.url) {
         return item.url;
       }
-      throw new Error("No image data in response");
+      throw new Error('No image data in response');
     });
 
     return {
@@ -141,21 +133,21 @@ export class VolcengineImageModel implements ImageModelV3 {
       },
       usage: response.usage
         ? {
-          inputTokens: undefined,
-          outputTokens: response.usage.output_tokens,
-          totalTokens: response.usage.total_tokens,
-        }
+            inputTokens: undefined,
+            outputTokens: response.usage.output_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
         : undefined,
     };
   }
 
   private convertFileToDataUrl(file: ImageModelV3File): string {
-    if (file.type === "url") {
+    if (file.type === 'url') {
       return file.url;
     }
 
     // file.type === "file"
-    if (typeof file.data === "string") {
+    if (typeof file.data === 'string') {
       // base64 string - convert to data URL
       return `data:${file.mediaType};base64,${file.data}`;
     }

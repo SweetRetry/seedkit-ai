@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from 'zod';
 
 /**
  * Response schema for Volcengine image generation API.
@@ -14,7 +14,7 @@ export const volcengineImageResponseSchema = z.object({
       url: z.string().optional(),
       b64_json: z.string().optional(),
       size: z.string().optional(),
-    })
+    }),
   ),
   usage: z
     .object({
@@ -25,4 +25,6 @@ export const volcengineImageResponseSchema = z.object({
     .optional(),
 });
 
-export type VolcengineImageResponse = z.infer<typeof volcengineImageResponseSchema>;
+export type VolcengineImageResponse = z.infer<
+  typeof volcengineImageResponseSchema
+>;

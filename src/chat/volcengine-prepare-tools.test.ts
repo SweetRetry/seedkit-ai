@@ -138,8 +138,12 @@ describe('prepareTools', () => {
       });
 
       expect(result.tools).toHaveLength(2);
-      expect((result.tools![0] as VolcengineFunctionTool).function.name).toBe('valid_tool');
-      expect((result.tools![1] as VolcengineFunctionTool).function.name).toBe('another_valid_tool');
+      expect((result.tools![0] as VolcengineFunctionTool).function.name).toBe(
+        'valid_tool',
+      );
+      expect((result.tools![1] as VolcengineFunctionTool).function.name).toBe(
+        'another_valid_tool',
+      );
       expect(result.toolWarnings).toEqual([
         {
           type: 'unsupported',
@@ -275,7 +279,9 @@ describe('prepareTools', () => {
         toolChoice: undefined,
       });
 
-      expect((result.tools![0] as VolcengineFunctionTool).function.parameters).toEqual(complexSchema);
+      expect(
+        (result.tools![0] as VolcengineFunctionTool).function.parameters,
+      ).toEqual(complexSchema);
     });
 
     it('should preserve all tool properties in output', async () => {

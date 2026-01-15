@@ -2,18 +2,18 @@ import {
   ImageModelV3,
   LanguageModelV3,
   NoSuchModelError,
-  ProviderV3
-} from "@ai-sdk/provider";
+  ProviderV3,
+} from '@ai-sdk/provider';
 import {
   FetchFunction,
   loadApiKey,
   withUserAgentSuffix,
-  withoutTrailingSlash
-} from "@ai-sdk/provider-utils";
-import { VERSION } from "./version";
-import { VolcengineChatLanguageModel, VolcengineModelId } from "./chat";
-import { VolcengineImageModel, VolcengineImageModelId } from "./image";
-import { volcengineTools } from "./volcengine-tools";
+  withoutTrailingSlash,
+} from '@ai-sdk/provider-utils';
+import { VERSION } from './version';
+import { VolcengineChatLanguageModel, VolcengineModelId } from './chat';
+import { VolcengineImageModel, VolcengineImageModelId } from './image';
+import { volcengineTools } from './volcengine-tools';
 
 export interface VolcengineProviderSettings {
   /**
@@ -58,10 +58,7 @@ Creates a model for text generation using the Chat Completions API.
   /**
 Creates a model for image generation.
 */
-  imageModel(
-    modelId: VolcengineImageModelId,
-
-  ): ImageModelV3;
+  imageModel(modelId: VolcengineImageModelId): ImageModelV3;
 
   /**
 Creates a model for text embeddings.
@@ -78,54 +75,52 @@ Volcengine-specific tools.
 Create a Volcengine provider instance.
  */
 export function createVolcengine(
-  options: VolcengineProviderSettings = {}
+  options: VolcengineProviderSettings = {},
 ): VolcengineProvider {
   const baseURL =
     withoutTrailingSlash(options.baseURL) ??
-    "https://ark.cn-beijing.volces.com/api/v3";
+    'https://ark.cn-beijing.volces.com/api/v3';
 
   const getHeaders = () =>
     withUserAgentSuffix(
       {
         Authorization: `Bearer ${loadApiKey({
           apiKey: options.apiKey,
-          environmentVariableName: "ARK_API_KEY",
-          description: "Volcengine"
+          environmentVariableName: 'ARK_API_KEY',
+          description: 'Volcengine',
         })}`,
-        ...options.headers
+        ...options.headers,
       },
-      `ai-sdk/volcengine/${VERSION}`
+      `ai-sdk/volcengine/${VERSION}`,
     );
 
   const createChatModel = (modelId: string) =>
     new VolcengineChatLanguageModel(modelId, {
-      provider: "volcengine.chat",
+      provider: 'volcengine.chat',
       baseURL,
       headers: getHeaders,
       fetch: options.fetch,
-      generateId: options.generateId
+      generateId: options.generateId,
     });
 
-  const createImageModel = (
-    modelId: string,
-  ) =>
+  const createImageModel = (modelId: string) =>
     new VolcengineImageModel(modelId, {
-      provider: "volcengine.image",
+      provider: 'volcengine.image',
       baseURL,
       headers: getHeaders,
-      fetch: options.fetch
+      fetch: options.fetch,
     });
 
   const provider = function (modelId: VolcengineModelId) {
     return createChatModel(modelId);
   };
 
-  provider.specificationVersion = "v3" as const;
+  provider.specificationVersion = 'v3' as const;
   provider.languageModel = createChatModel;
   provider.chat = createChatModel;
   provider.imageModel = createImageModel;
   provider.embeddingModel = (modelId: string) => {
-    throw new NoSuchModelError({ modelId, modelType: "embeddingModel" });
+    throw new NoSuchModelError({ modelId, modelType: 'embeddingModel' });
   };
   provider.tools = volcengineTools;
 

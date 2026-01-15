@@ -6,6 +6,7 @@ export function getResponseMetadata(response: {
   return {
     id: response.id,
     modelId: response.model,
-    timestamp: response.created != null ? new Date(response.created * 1000) : undefined
+    timestamp:
+      response.created != null ? new Date(response.created * 1000) : undefined,
   };
 }
