@@ -58,8 +58,8 @@ function createModel(fetchMock?: ReturnType<typeof vi.fn>, modelId = 'doubao-see
 }
 
 async function getCreateRequestBody(fetchMock: ReturnType<typeof vi.fn>) {
-  const createCall = fetchMock.mock.calls.find(
-    ([, init]: [string, RequestInit]) => init?.method === 'POST',
+  const createCall = (fetchMock.mock.calls as [string, RequestInit][]).find(
+    ([, init]) => init?.method === 'POST',
   );
   return JSON.parse((createCall![1] as RequestInit).body as string);
 }
@@ -360,8 +360,8 @@ describe('VolcengineVideoModel', () => {
         headers: { 'X-Request-Header': 'request-value' },
       });
 
-      const createCall = fetch.mock.calls.find(
-        ([, init]: [string, RequestInit]) => init?.method === 'POST',
+      const createCall = (fetch.mock.calls as [string, RequestInit][]).find(
+        ([, init]) => init?.method === 'POST',
       )!;
       const headers = new Headers(
         (createCall[1] as RequestInit).headers as Record<string, string>,
@@ -640,7 +640,9 @@ describe('VolcengineVideoModel', () => {
       });
 
       expect(pollCount).toBe(3);
-      expect(result.videos[0].url).toBe('https://cdn.volcengine.com/output.mp4');
+      const video = result.videos[0];
+      expect(video.type).toBe('url');
+      expect((video as { type: 'url'; url: string }).url).toBe('https://cdn.volcengine.com/output.mp4');
     });
 
     it('times out after pollTimeoutMs', async () => {

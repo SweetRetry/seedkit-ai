@@ -21,7 +21,6 @@ import {
   postJsonToApi,
   removeUndefinedEntries,
 } from '@ai-sdk/provider-utils';
-import { z } from 'zod';
 import { volcengineFailedResponseHandler } from '../chat/volcengine-error';
 import { convertToVolcengineResponsesInput } from './convert-to-volcengine-responses-input';
 import { convertVolcengineResponsesUsage } from './convert-volcengine-responses-usage';
@@ -200,7 +199,8 @@ export class VolcengineResponsesLanguageModel implements LanguageModelV3 {
     });
 
     const { content, hasToolCalls } = this.extractContent(response);
-    const rawFinishReason = response.incomplete_details?.reason;
+    const rawFinishReason =
+      response.incomplete_details?.reason ?? undefined;
 
     return {
       content,
@@ -209,13 +209,13 @@ export class VolcengineResponsesLanguageModel implements LanguageModelV3 {
           finishReason: rawFinishReason,
           hasToolCalls,
         }),
-        raw: rawFinishReason ?? undefined,
+        raw: rawFinishReason,
       },
       usage: convertVolcengineResponsesUsage(response.usage),
       request: { body },
       response: {
         id: response.id,
-        modelId: response.model,
+        modelId: response.model ?? undefined,
         timestamp:
           response.created_at != null
             ? new Date(response.created_at * 1000)
@@ -271,13 +271,6 @@ export class VolcengineResponsesLanguageModel implements LanguageModelV3 {
             controller.enqueue({ type: 'stream-start', warnings });
           },
           transform(parseResult, controller) {
-            if (options.includeRawChunks) {
-              controller.enqueue({
-                type: 'raw',
-                rawValue: parseResult.rawValue,
-              });
-            }
-
             if (!parseResult.success) {
               controller.enqueue({ type: 'error', error: parseResult.error });
               return;
@@ -285,66 +278,65 @@ export class VolcengineResponsesLanguageModel implements LanguageModelV3 {
 
             const chunk = parseResult.value;
 
-            if (
-              chunk.type === 'response.output_item.added' &&
-              isFunctionCallItem(chunk.item)
-            ) {
-              toolCallsByItemId[chunk.item.id] = {
-                toolName: chunk.item.name,
-                toolCallId: chunk.item.call_id,
-                arguments: chunk.item.arguments,
-              };
+            if (options.includeRawChunks) {
+              controller.enqueue({ type: 'raw', rawValue: chunk });
+            }
+
+            if (chunk.type === 'response.output_item.added') {
+              if (chunk.item.type === 'function_call') {
+                toolCallsByItemId[chunk.item.id] = {
+                  toolName: chunk.item.name,
+                  toolCallId: chunk.item.call_id,
+                  arguments: chunk.item.arguments,
+                };
+              } else if (chunk.item.type === 'reasoning') {
+                activeReasoningId = chunk.item.id;
+                controller.enqueue({
+                  type: 'reasoning-start',
+                  id: activeReasoningId,
+                });
+              } else if (chunk.item.type === 'message') {
+                controller.enqueue({ type: 'text-start', id: chunk.item.id });
+              }
+              return;
+            }
+
+            if (chunk.type === 'response.output_item.done') {
+              if (chunk.item.type === 'function_call') {
+                const toolCall = toolCallsByItemId[chunk.item.id];
+                controller.enqueue({
+                  type: 'tool-call',
+                  toolCallId: toolCall?.toolCallId ?? chunk.item.call_id,
+                  toolName: toolCall?.toolName ?? chunk.item.name,
+                  input: toolCall?.arguments ?? chunk.item.arguments,
+                });
+                delete toolCallsByItemId[chunk.item.id];
+                hasToolCalls = true;
+              } else if (chunk.item.type === 'reasoning') {
+                controller.enqueue({
+                  type: 'reasoning-end',
+                  id: chunk.item.id,
+                });
+                activeReasoningId = undefined;
+              } else if (chunk.item.type === 'message') {
+                controller.enqueue({ type: 'text-end', id: chunk.item.id });
+              }
               return;
             }
 
             if (chunk.type === 'response.function_call_arguments.delta') {
-              const itemId = asString(chunk.item_id);
-              if (itemId == null) {
-                return;
-              }
               const toolCall =
-                toolCallsByItemId[itemId] ?? (toolCallsByItemId[itemId] = {});
-              toolCall.arguments =
-                (toolCall.arguments ?? '') + (asString(chunk.delta) ?? '');
+                toolCallsByItemId[chunk.item_id] ??
+                (toolCallsByItemId[chunk.item_id] = {});
+              toolCall.arguments = (toolCall.arguments ?? '') + chunk.delta;
               return;
             }
 
             if (chunk.type === 'response.function_call_arguments.done') {
-              const itemId = asString(chunk.item_id);
-              if (itemId == null) {
-                return;
-              }
               const toolCall =
-                toolCallsByItemId[itemId] ?? (toolCallsByItemId[itemId] = {});
-              toolCall.arguments = asString(chunk.arguments);
-              return;
-            }
-
-            if (
-              chunk.type === 'response.output_item.done' &&
-              isFunctionCallItem(chunk.item)
-            ) {
-              const toolCall = toolCallsByItemId[chunk.item.id];
-              controller.enqueue({
-                type: 'tool-call',
-                toolCallId: toolCall?.toolCallId ?? chunk.item.call_id,
-                toolName: toolCall?.toolName ?? chunk.item.name,
-                input: toolCall?.arguments ?? chunk.item.arguments ?? '',
-              });
-              delete toolCallsByItemId[chunk.item.id];
-              hasToolCalls = true;
-              return;
-            }
-
-            if (
-              chunk.type === 'response.output_item.added' &&
-              isReasoningItem(chunk.item)
-            ) {
-              activeReasoningId = chunk.item.id;
-              controller.enqueue({
-                type: 'reasoning-start',
-                id: activeReasoningId,
-              });
+                toolCallsByItemId[chunk.item_id] ??
+                (toolCallsByItemId[chunk.item_id] = {});
+              toolCall.arguments = chunk.arguments;
               return;
             }
 
@@ -355,65 +347,37 @@ export class VolcengineResponsesLanguageModel implements LanguageModelV3 {
               controller.enqueue({
                 type: 'reasoning-delta',
                 id: activeReasoningId,
-                delta: asString(chunk.delta) ?? '',
+                delta: chunk.delta,
               });
-              return;
-            }
-
-            if (
-              chunk.type === 'response.output_item.done' &&
-              isReasoningItem(chunk.item)
-            ) {
-              controller.enqueue({ type: 'reasoning-end', id: chunk.item.id });
-              activeReasoningId = undefined;
-              return;
-            }
-
-            if (
-              chunk.type === 'response.output_item.added' &&
-              isMessageItem(chunk.item)
-            ) {
-              controller.enqueue({ type: 'text-start', id: chunk.item.id });
               return;
             }
 
             if (chunk.type === 'response.output_text.delta') {
-              const itemId = asString(chunk.item_id);
-              if (itemId == null) {
-                return;
-              }
               controller.enqueue({
                 type: 'text-delta',
-                id: itemId,
-                delta: asString(chunk.delta) ?? '',
+                id: chunk.item_id,
+                delta: chunk.delta,
               });
-              return;
-            }
-
-            if (
-              chunk.type === 'response.output_item.done' &&
-              isMessageItem(chunk.item)
-            ) {
-              controller.enqueue({ type: 'text-end', id: chunk.item.id });
               return;
             }
 
             if (
               chunk.type === 'response.completed' ||
-              chunk.type === 'response.incomplete'
+              chunk.type === 'response.incomplete' ||
+              chunk.type === 'response.failed'
             ) {
-              const response = asResponseObject(chunk.response);
-              if (response == null) {
-                return;
-              }
+              const rawReason =
+                chunk.response.incomplete_details?.reason ?? undefined;
               finishReason = {
                 unified: mapVolcengineResponsesFinishReason({
-                  finishReason: response.incomplete_details?.reason,
+                  finishReason: rawReason,
                   hasToolCalls,
                 }),
-                raw: response.incomplete_details?.reason ?? undefined,
+                raw: rawReason,
               };
-              const mappedUsage = convertVolcengineResponsesUsage(response.usage);
+              const mappedUsage = convertVolcengineResponsesUsage(
+                chunk.response.usage,
+              );
               usage.inputTokens = mappedUsage.inputTokens;
               usage.outputTokens = mappedUsage.outputTokens;
               usage.raw = mappedUsage.raw;
@@ -533,70 +497,3 @@ export class VolcengineResponsesLanguageModel implements LanguageModelV3 {
   }
 }
 
-function isMessageItem(
-  value: unknown,
-): value is { type: 'message'; id: string } {
-  return (
-    typeof value === 'object' &&
-    value != null &&
-    (value as { type?: unknown }).type === 'message' &&
-    typeof (value as { id?: unknown }).id === 'string'
-  );
-}
-
-function isReasoningItem(
-  value: unknown,
-): value is { type: 'reasoning'; id: string } {
-  return (
-    typeof value === 'object' &&
-    value != null &&
-    (value as { type?: unknown }).type === 'reasoning' &&
-    typeof (value as { id?: unknown }).id === 'string'
-  );
-}
-
-function isFunctionCallItem(
-  value: unknown,
-): value is {
-  type: 'function_call';
-  id: string;
-  name: string;
-  call_id: string;
-  arguments?: string;
-} {
-  return (
-    typeof value === 'object' &&
-    value != null &&
-    (value as { type?: unknown }).type === 'function_call' &&
-    typeof (value as { id?: unknown }).id === 'string' &&
-    typeof (value as { name?: unknown }).name === 'string' &&
-    typeof (value as { call_id?: unknown }).call_id === 'string'
-  );
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
-}
-
-function asResponseObject(value: unknown): {
-  incomplete_details?: { reason?: string };
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    input_tokens_details?: { cached_tokens?: number };
-    output_tokens_details?: { reasoning_tokens?: number };
-  };
-} | null {
-  if (typeof value !== 'object' || value == null) {
-    return null;
-  }
-  return value as {
-    incomplete_details?: { reason?: string };
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      input_tokens_details?: { cached_tokens?: number };
-      output_tokens_details?: { reasoning_tokens?: number };
-    };
-  };
-}

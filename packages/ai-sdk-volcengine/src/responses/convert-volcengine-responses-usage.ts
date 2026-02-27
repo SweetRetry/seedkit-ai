@@ -20,10 +20,11 @@ export function convertVolcengineResponsesUsage(
     };
   }
 
-  const inputTokens = usage.input_tokens;
-  const outputTokens = usage.output_tokens;
-  const cachedTokens = usage.input_tokens_details?.cached_tokens;
-  const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
+  const inputTokens = usage.input_tokens ?? undefined;
+  const outputTokens = usage.output_tokens ?? undefined;
+  const cachedTokens = usage.input_tokens_details?.cached_tokens ?? undefined;
+  const reasoningTokens =
+    usage.output_tokens_details?.reasoning_tokens ?? undefined;
 
   return {
     inputTokens: {

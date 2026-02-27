@@ -1,7 +1,41 @@
+# Dependencies
 node_modules
+
+# Build outputs
 dist
-.env.local
-
-
+.next
 output
+
+# Turbo
+.turbo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# TypeScript
+*.tsbuildinfo
+
+# Test coverage
+coverage
+
+# Temp / scratch
 tmp
+
+# OS
+.DS_Store
+
+# IDE
+.idea
+.vscode
+
+# Archives
+*.zip
+*.tar.gz
+*.tgz
+*.bak
+*.tmp

@@ -5,15 +5,15 @@ import { LanguageModelV3Usage } from '@ai-sdk/provider';
  * @see https://www.volcengine.com/docs/82379/1494384
  */
 export type VolcengineUsage = {
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  total_tokens?: number;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
   prompt_tokens_details?: {
-    cached_tokens?: number;
-  };
+    cached_tokens?: number | null;
+  } | null;
   completion_tokens_details?: {
-    reasoning_tokens?: number;
-  };
+    reasoning_tokens?: number | null;
+  } | null;
 };
 
 /**
@@ -46,10 +46,12 @@ export function convertVolcengineUsage(
     };
   }
 
-  const promptTokens = usage.prompt_tokens;
-  const completionTokens = usage.completion_tokens;
-  const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
-  const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens;
+  const promptTokens = usage.prompt_tokens ?? undefined;
+  const completionTokens = usage.completion_tokens ?? undefined;
+  const cachedTokens =
+    usage.prompt_tokens_details?.cached_tokens ?? undefined;
+  const reasoningTokens =
+    usage.completion_tokens_details?.reasoning_tokens ?? undefined;
 
   // Calculate non-cached input tokens
   const noCacheTokens =
