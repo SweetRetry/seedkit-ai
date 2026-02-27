@@ -1,0 +1,163 @@
+---
+title: 图像生成 API 参考
+description: 基于 Seedream 系列模型的图像生成 API，支持文生图、图生图、多图融合和组图输出。
+---
+
+`POST https://ark.cn-beijing.volces.com/api/v3/images/generations`
+
+---
+
+## 模型
+
+| 模型 | Doubao-Seedream-5.0-lite | Doubao-Seedream-4.5 | Doubao-Seedream-4.0 |
+|------|--------------------------|-------------------|-------------------|
+| Model ID | doubao-seedream-5-0-260128 | doubao-seedream-4-5-251128 | doubao-seedream-4-0-250828 |
+| 文生图 | ✓ | ✓ | ✓ |
+| 图生图 | ✓ | ✓ | ✓ |
+| 组图输出 | ✓ | ✓ | ✓ |
+| 流式输出 | ✓ | ✓ | ✓ |
+| 联网搜索 | ✓ | ✗ | ✗ |
+| **分辨率** | 2K, 3K | 2K, 4K | 1K, 2K, 4K |
+| **输出格式** | png, jpeg | jpeg | jpeg |
+
+---
+
+## 基础用法
+
+### 文生图
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/images/generations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -d '{
+    "model": "doubao-seedream-5-0-260128",
+    "prompt": "充满活力的特写编辑肖像，模特眼神犀利，头戴雕塑感帽子",
+    "size": "2K",
+    "output_format": "png",
+    "watermark": false
+  }'
+```
+
+### 图文生图（单图输入）
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/images/generations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -d '{
+    "model": "doubao-seedream-5-0-260128",
+    "prompt": "保持模特姿势不变，将服装材质从银色金属改为完全透明的清水",
+    "image": "https://example.com/reference.png",
+    "size": "2K",
+    "output_format": "png",
+    "watermark": false
+  }'
+```
+
+### 多图融合
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/images/generations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -d '{
+    "model": "doubao-seedream-5-0-260128",
+    "prompt": "将图1的服装换为图2的服装",
+    "image": ["https://example.com/img1.png", "https://example.com/img2.png"],
+    "sequential_image_generation": "disabled",
+    "size": "2K",
+    "output_format": "png",
+    "watermark": false
+  }'
+```
+
+### 组图输出
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/images/generations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -d '{
+    "model": "doubao-seedream-5-0-260128",
+    "prompt": "生成一组共4张连贯插画，展现同一庭院一角的四季变迁",
+    "sequential_image_generation": "auto",
+    "size": "2K",
+    "output_format": "png",
+    "watermark": false
+  }'
+```
+
+---
+
+## 请求参数
+
+#### model `string` (必需)
+
+模型 ID，见上方模型表。
+
+#### prompt `string` (必需)
+
+图像生成提示词。
+
+#### image `string | string[]` (可选)
+
+参考图：单张传字符串，多张传数组。支持公网 URL 或 Base64（`data:image/<格式>;base64,<内容>`）。
+
+#### size `string` (可选)
+
+支持两种方式，不可混用：
+
+**档位**：`1K` / `2K` / `3K` / `4K`（各模型支持范围见模型表）
+
+**像素值**：如 `2048x2048`，宽高比范围 [1/16, 16]
+
+#### response_format `string` (可选)
+
+| 值 | 说明 |
+|----|------|
+| `url` | 返回图片下载链接（默认） |
+| `b64_json` | 返回 Base64 编码的 JSON 数据 |
+
+#### output_format `string` (可选)
+
+- Seedream 5.0 lite：支持 `png` / `jpeg`
+- Seedream 4.5 / 4.0：固定为 `jpeg`
+
+#### watermark `boolean` (可选，默认 `false`)
+
+是否添加水印。
+
+#### stream `boolean` (可选，默认 `false`)
+
+开启后每张图片生成完毕立即推送，无需等待全部完成。
+
+#### sequential_image_generation `string` (可选)
+
+| 值 | 说明 |
+|----|------|
+| `auto` | 自动判断，适合组图输出场景 |
+| `disabled` | 禁用，适合多图融合场景 |
+
+#### tools `array` (可选)
+
+设置 `[{"type": "web_search"}]` 开启联网搜索（仅 Seedream 5.0 lite 支持）。
+
+#### optimize_prompt_options `object` (可选)
+
+通过 `mode` 控制提示词优化：`standard`（默认）或 `fast`（仅 Seedream 4.0，速度优先）。
+
+---
+
+## 响应示例
+
+```json
+{
+  "created": 1234567890,
+  "data": [
+    {
+      "url": "https://example.com/generated-image.png"
+    }
+  ]
+}
+```

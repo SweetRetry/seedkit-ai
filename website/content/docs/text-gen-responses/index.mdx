@@ -1,0 +1,253 @@
+---
+title: Responses API 参考
+description: 新一代对话接口，支持多轮会话管理、联网搜索、深度思考和结构化输出。
+---
+
+`POST https://ark.cn-beijing.volces.com/api/v3/responses`
+
+---
+
+## 创建响应
+
+### 请求参数
+
+#### model `string` (必需)
+
+调用的模型 ID，见[模型列表](https://www.volcengine.com/docs/82379/1330310)。
+
+#### input `string | array` (必需)
+
+输入给模型的内容。
+
+**简写形式（纯文本）**
+
+```json
+{ "input": "你好" }
+```
+
+**完整形式（消息数组）**，每个元素字段：
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `role` | string | ✓ | `user` / `assistant` / `system` / `developer` |
+| `content` | string \| array | ✓ | 消息内容 |
+| `type` | string | ✓ | 固定为 `message` |
+| `partial` | boolean | | 续写模式，仅最后一条 `assistant` 消息可用 |
+
+**content 内容类型**
+
+| type | 字段 | 说明 |
+|------|------|------|
+| `input_text` | `text` | 文本内容 |
+| `input_image` | `image_url`, `detail`, `image_pixel_limit` | 图片（URL 或 Base64） |
+| `input_video` | `video_url`, `fps` | 视频（URL 或 Base64），fps 范围 [0.2, 5] |
+| `input_file` | `file_data` / `file_url`, `filename` | PDF 文件，≤ 50 MB |
+
+#### instructions `string | null` (可选)
+
+在上下文头部插入系统/开发者消息。
+
+#### stream `boolean | null` (可选，默认 `false`)
+
+| 值 | 说明 |
+|----|------|
+| `false` | 生成完毕后一次性返回 |
+| `true` | 按 SSE 协议流式返回，以 `data: [DONE]` 结束 |
+
+#### temperature / top_p (可选)
+
+同 Chat API，范围分别为 [0, 2] 和 [0, 1]。
+
+#### max_output_tokens `integer | null` (可选)
+
+最大输出 token 数，包含思维链和回答内容。
+
+#### thinking `object` (可选)
+
+| `thinking.type` | 支持模型 |
+|-----------------|---------|
+| `enabled` | 全部深度思考模型（默认开启） |
+| `disabled` | 全部模型 |
+| `auto` | 仅 doubao-seed-1-6-250615 |
+
+#### reasoning `object` (可选，默认 `{"effort": "medium"}`)
+
+仅在 `thinking.type` 为 `enabled` 时有效：
+
+| `reasoning.effort` | 说明 |
+|--------------------|------|
+| `minimal` | 关闭思考，直接回答 |
+| `low` | 轻量思考 |
+| `medium` | 均衡模式（默认） |
+| `high` | 深度分析 |
+
+#### text `object` (可选)
+
+指定输出格式，支持 `text`、`json_object`、`json_schema`（推荐）。
+
+#### tools `array` (可选)
+
+支持 `function`（自定义函数）和 `web_search`（联网搜索）。
+
+联网搜索参数：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `limit` | integer | 单轮最大召回条数，[1, 50]，默认 10 |
+| `max_keyword` | integer | 最大并行搜索关键词数 |
+| `sources` | string[] | 附加内容源：`toutiao` / `douyin` / `moji` |
+
+#### tool_choice (可选)
+
+> 仅 `doubao-seed-1-6-***` 系列支持。
+
+`auto` / `none` / `required` / `{"type": "function", "name": "函数名"}`
+
+---
+
+### 请求示例
+
+**文本生成**
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/responses \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "doubao-seed-1-6-251015",
+    "input": "你好，介绍一下自己"
+  }'
+```
+
+**深度思考（流式）**
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/responses \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "doubao-seed-1-6-251015",
+    "input": "推理模型与非推理模型的区别",
+    "thinking": { "type": "enabled" },
+    "reasoning": { "effort": "high" },
+    "stream": true
+  }'
+```
+
+**结构化输出（json_schema）**
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/responses \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "doubao-seed-1-6-251015",
+    "input": [
+      {
+        "role": "user",
+        "content": [{ "type": "input_text", "text": "解方程 8x + 7 = -23，用 JSON 格式输出步骤" }]
+      }
+    ],
+    "thinking": { "type": "disabled" },
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "name": "math_reasoning",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "explanation": { "type": "string" },
+                  "output": { "type": "string" }
+                },
+                "required": ["explanation", "output"],
+                "additionalProperties": false
+              }
+            },
+            "final_answer": { "type": "string" }
+          },
+          "required": ["steps", "final_answer"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }'
+```
+
+**Function Calling**
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/responses \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "doubao-seed-1-6-251015",
+    "input": "北京今天天气怎么样？",
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "获取指定城市的天气信息",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": { "type": "string", "description": "城市名称" }
+          },
+          "required": ["city"]
+        }
+      }
+    ]
+  }'
+```
+
+---
+
+### 响应参数
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | string | 响应唯一 ID |
+| `status` | string | `completed` / `incomplete` / `failed` |
+| `output` | array | 模型输出内容列表（message / reasoning / function_call） |
+| `usage.input_tokens` | integer | 输入 token 数 |
+| `usage.output_tokens` | integer | 输出 token 数（含思维链） |
+| `usage.total_tokens` | integer | 总 token 数 |
+
+---
+
+## 查询响应
+
+`GET https://ark.cn-beijing.volces.com/api/v3/responses/{response_id}`
+
+仅支持查询已完成的响应，返回与创建响应相同结构的 response object。
+
+---
+
+## 流式事件
+
+开启 `stream: true` 后，服务端通过 SSE 推送以下事件序列：
+
+| 事件类型 | 触发时机 |
+|----------|---------|
+| `response.created` | 响应对象创建时 |
+| `response.output_text.delta` | 文本增量片段 |
+| `response.reasoning_summary_text.delta` | 思维链增量文本 |
+| `response.function_call_arguments.delta` | 函数调用参数增量 |
+| `response.completed` | 响应正常完成 |
+| `response.incomplete` | 响应以未完成状态结束 |
+| `response.failed` | 响应失败 |
+| `error` | 发生错误 |
+
+**delta 事件额外字段：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `delta` | string | 新增文本片段 |
+| `item_id` | string | 所属输出项 ID |
+| `output_index` | integer | 所属输出项的列表索引 |
+| `content_index` | integer | 所属内容块的索引 |

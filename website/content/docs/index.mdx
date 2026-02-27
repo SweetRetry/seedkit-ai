@@ -1,0 +1,55 @@
+---
+title: 简介
+description: Volcengine（豆包）的 Vercel AI SDK 适配器，支持对话生成、图像生成和视频生成。
+---
+
+## 什么是 AI SDK Volcengine Adapter？
+
+`@sweetretry/ai-sdk-volcengine-adapter` 是 [Vercel AI SDK](https://sdk.vercel.ai/) 的火山引擎（豆包）提供商适配器，让你可以在 AI SDK 标准接口下使用豆包大模型。
+
+## 功能
+
+- **对话生成**（Chat API）：支持流式输出、多模态输入、Function Calling、结构化输出、深度思考
+- **响应 API**（Responses API）：新一代对话接口，支持多轮会话管理、联网搜索
+- **图像生成**：基于 Seedream 系列模型，支持文生图、图生图、多图融合
+- **视频生成**：基于 Seedance 系列模型，支持文生视频、图生视频
+
+## 安装
+
+```bash
+npm install @sweetretry/ai-sdk-volcengine-adapter
+# 或
+pnpm add @sweetretry/ai-sdk-volcengine-adapter
+```
+
+## 快速开始
+
+```ts
+import { volcengine } from '@sweetretry/ai-sdk-volcengine-adapter';
+import { generateText } from 'ai';
+
+const { text } = await generateText({
+  model: volcengine('doubao-seed-1-6-251015'),
+  prompt: '你好！',
+});
+
+console.log(text);
+```
+
+## 配置
+
+通过环境变量设置 API Key：
+
+```bash
+ARK_API_KEY=your_api_key_here
+```
+
+或在代码中直接传入：
+
+```ts
+import { createVolcengine } from '@sweetretry/ai-sdk-volcengine-adapter';
+
+const volcengine = createVolcengine({
+  apiKey: 'your_api_key_here',
+});
+```
