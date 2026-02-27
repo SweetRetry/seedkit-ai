@@ -326,6 +326,63 @@ describe('VolcengineChatLanguageModel', () => {
       expect(callBody.seed).toBe(42);
     });
 
+    it('should send max_completion_tokens and omit max_tokens when maxCompletionTokens is set', async () => {
+      const mockResponse = {
+        id: 'chatcmpl-123',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'Response' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      };
+
+      const mockFetch = createMockFetch(mockResponse);
+      const model = createModel(mockFetch);
+
+      await model.doGenerate({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'Hello' }] }],
+        maxOutputTokens: 100,
+        providerOptions: { volcengine: { maxCompletionTokens: 4000 } },
+      });
+
+      const callBody = JSON.parse(
+        (mockFetch.mock.calls[0][1] as RequestInit).body as string,
+      );
+      expect(callBody.max_completion_tokens).toBe(4000);
+      expect(callBody.max_tokens).toBeUndefined();
+    });
+
+    it('should send max_tokens and omit max_completion_tokens when maxCompletionTokens is not set', async () => {
+      const mockResponse = {
+        id: 'chatcmpl-123',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'Response' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      };
+
+      const mockFetch = createMockFetch(mockResponse);
+      const model = createModel(mockFetch);
+
+      await model.doGenerate({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'Hello' }] }],
+        maxOutputTokens: 512,
+      });
+
+      const callBody = JSON.parse(
+        (mockFetch.mock.calls[0][1] as RequestInit).body as string,
+      );
+      expect(callBody.max_tokens).toBe(512);
+      expect(callBody.max_completion_tokens).toBeUndefined();
+    });
+
     it('should handle finish reason: length', async () => {
       const mockResponse = {
         id: 'chatcmpl-123',

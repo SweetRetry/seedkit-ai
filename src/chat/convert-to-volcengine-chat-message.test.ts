@@ -134,6 +134,122 @@ describe('convertToVolcengineChatMessages', () => {
       ]);
     });
 
+    it('should pass detail from providerOptions for image', () => {
+      const result = convertToVolcengineChatMessages([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'file',
+              data: new URL('https://example.com/image.jpg'),
+              mediaType: 'image/jpeg',
+              providerOptions: { volcengine: { detail: 'high' } },
+            },
+          ],
+        },
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image_url',
+              image_url: {
+                url: 'https://example.com/image.jpg',
+                detail: 'high',
+              },
+            },
+          ],
+        },
+      ]);
+    });
+
+    it('should omit detail when not provided for image', () => {
+      const result = convertToVolcengineChatMessages([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'file',
+              data: new URL('https://example.com/image.jpg'),
+              mediaType: 'image/jpeg',
+            },
+          ],
+        },
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image_url',
+              image_url: { url: 'https://example.com/image.jpg' },
+            },
+          ],
+        },
+      ]);
+    });
+
+    it('should pass fps from providerOptions for video', () => {
+      const result = convertToVolcengineChatMessages([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'file',
+              data: new URL('https://example.com/video.mp4'),
+              mediaType: 'video/mp4',
+              providerOptions: { volcengine: { fps: 2 } },
+            },
+          ],
+        },
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'video_url',
+              video_url: {
+                url: 'https://example.com/video.mp4',
+                fps: 2,
+              },
+            },
+          ],
+        },
+      ]);
+    });
+
+    it('should omit fps when not provided for video', () => {
+      const result = convertToVolcengineChatMessages([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'file',
+              data: new URL('https://example.com/video.mp4'),
+              mediaType: 'video/mp4',
+            },
+          ],
+        },
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'video_url',
+              video_url: { url: 'https://example.com/video.mp4' },
+            },
+          ],
+        },
+      ]);
+    });
+
     it('should convert PDF file with URL string', () => {
       const result = convertToVolcengineChatMessages([
         {

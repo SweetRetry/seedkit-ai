@@ -39,6 +39,13 @@ const volcengineChatOptionsSchema = z.object({
    * @default false
    */
   thinking: z.boolean().optional(),
+
+  /**
+   * Controls the maximum tokens for the entire completion (answer + reasoning chain).
+   * When set, overrides max_tokens. Cannot be used simultaneously with max_tokens.
+   * Use this with thinking-enabled models to cap total output budget.
+   */
+  maxCompletionTokens: z.number().int().positive().optional(),
 });
 
 export const volcengineChatOptions = lazySchema(() =>

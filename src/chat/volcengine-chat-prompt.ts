@@ -19,8 +19,8 @@ export interface VolcengineChatUserMessage {
 
 export type VolcengineChatUserMessageContent =
   | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string } }
-  | { type: 'video_url'; video_url: { url: string } }
+  | { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' } }
+  | { type: 'video_url'; video_url: { url: string; fps?: number } }
   | { type: 'input_file'; file_url: string }
   | { type: 'input_file'; file_data: string; filename: string };
 

@@ -51,15 +51,27 @@ export function convertToVolcengineChatMessages(
                   const { mediaType, data } = part;
 
                   if (mediaType.startsWith('image/')) {
+                    const detail = part.providerOptions?.['volcengine']?.[
+                      'detail'
+                    ] as 'low' | 'high' | undefined;
                     return {
                       type: 'image_url',
-                      image_url: { url: formatDataUrl(data, mediaType) },
+                      image_url: {
+                        url: formatDataUrl(data, mediaType),
+                        ...(detail != null && { detail }),
+                      },
                     };
                   }
                   if (mediaType.startsWith('video/')) {
+                    const fps = part.providerOptions?.['volcengine']?.[
+                      'fps'
+                    ] as number | undefined;
                     return {
                       type: 'video_url',
-                      video_url: { url: formatDataUrl(data, mediaType) },
+                      video_url: {
+                        url: formatDataUrl(data, mediaType),
+                        ...(fps != null && { fps }),
+                      },
                     };
                   }
                   if (mediaType === 'application/pdf') {

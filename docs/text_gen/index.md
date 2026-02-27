@@ -1,0 +1,279 @@
+# Chat API 参考
+
+`POST https://ark.cn-beijing.volces.com/api/v3/chat/completions`
+
+---
+
+## 请求参数
+
+#### model `string` (必需)
+
+调用的模型 ID，见[模型列表](https://www.volcengine.com/docs/82379/1330310)。
+
+#### messages `array` (必需)
+
+对话消息列表，每个元素为一条消息：
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `role` | string | ✓ | `system` / `user` / `assistant` |
+| `content` | string \| array | ✓ | 消息内容，纯文本或内容列表（多模态时用数组） |
+
+#### stream `boolean` (可选，默认 `false`)
+
+| 值 | 说明 |
+|----|------|
+| `false` | 生成完毕后一次性返回 |
+| `true` | 按 SSE 协议流式返回，以 `data: [DONE]` 结束 |
+
+#### temperature `float | null` (可选，默认 `1`)
+
+采样温度，范围 [0, 2]。值越高输出越随机。建议不与 `top_p` 同时调整。
+
+#### top_p `float | null` (可选，默认 `0.7`)
+
+核采样阈值，范围 [0, 1]。建议不与 `temperature` 同时调整。
+
+#### max_tokens `integer` (可选，默认 `4096`)
+
+控制模型**回答**的最大 token 数（不含思维链）。不可与 `max_completion_tokens` 同时设置。
+
+#### max_completion_tokens `integer` (可选)
+
+控制模型**回答 + 思维链**的总最大 token 数。设置后 `max_tokens` 默认值失效。不可与 `max_tokens` 同时设置。
+
+#### thinking `object` (可选)
+
+控制深度思考模式：
+
+| `thinking.type` | 说明 |
+|-----------------|------|
+| `enabled` | 强制开启思考 |
+| `disabled` | 强制关闭思考 |
+
+#### response_format `object` (可选)
+
+指定输出格式，见[结构化输出](#结构化输出)。
+
+#### tools `array` (可选)
+
+Function Calling 工具定义：
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `type` | string | ✓ | 固定为 `function` |
+| `function.name` | string | ✓ | 函数名称 |
+| `function.description` | string | | 函数描述，模型据此判断是否调用 |
+| `function.parameters` | object | | JSON Schema 格式的参数定义 |
+
+---
+
+## 请求示例
+
+**文本生成**
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -d '{
+    "model": "doubao-seed-1-6-251015",
+    "messages": [
+      {"role": "user", "content": "常见的十字花科植物有哪些？"}
+    ]
+  }'
+```
+
+**多轮对话**
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -d '{
+    "model": "doubao-seed-1-6-251015",
+    "messages": [
+      {"role": "user", "content": "深度思考模型与非深度思考模型区别"},
+      {"role": "assistant", "content": "推理模型主要依靠逻辑推导得出结论，非推理模型则通过模式识别完成任务。"},
+      {"role": "user", "content": "能举个具体例子吗？"}
+    ]
+  }'
+```
+
+**流式输出**
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -d '{
+    "model": "doubao-seed-1-6-251015",
+    "messages": [
+      {"role": "user", "content": "常见的十字花科植物有哪些？"}
+    ],
+    "stream": true
+  }'
+```
+
+**结构化输出（json_schema）**
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/chat/completions \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "doubao-seed-1-6-250615",
+    "messages": [
+      {"role": "system", "content": "你是一位数学辅导老师。"},
+      {"role": "user", "content": "解题: 8x + 9 = 32 and x + y = 1"}
+    ],
+    "thinking": {"type": "disabled"},
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "math_reasoning",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "explanation": {"type": "string"},
+                  "output": {"type": "string"}
+                },
+                "required": ["explanation", "output"],
+                "additionalProperties": false
+              }
+            },
+            "final_answer": {"type": "string"}
+          },
+          "required": ["steps", "final_answer"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }'
+```
+
+**图片理解**
+
+```bash
+curl https://ark.cn-beijing.volces.com/api/v3/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -d '{
+    "model": "doubao-seed-1-6-251015",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "image_url",
+            "image_url": {"url": "https://ark-project.tos-cn-beijing.volces.com/doc_image/ark_demo_img_1.png"}
+          },
+          {"type": "text", "text": "描述这张图片的内容"}
+        ]
+      }
+    ]
+  }'
+```
+
+---
+
+## 多模态输入规格
+
+### 图片
+
+支持两种传入方式：
+
+| 方式 | 字段 | 限制 |
+|------|------|------|
+| URL | `image_url.url` = 公网 URL | 单图 ≤ 10 MB |
+| Base64 | `image_url.url` = `data:image/<格式>;base64,<内容>` | 单图 ≤ 10 MB，请求体 ≤ 64 MB |
+
+通过 `detail` 参数控制理解精细度：
+
+| detail | 说明 | token 范围 | 图片像素范围 |
+|--------|------|-----------|------------|
+| `low` | 速度快，适合细节少的场景 | 4–1312 | 3136–1,048,576 |
+| `high` | 识别更多细节，速度较慢 | 4–5120 | 3136–4,014,080 |
+
+图片像素范围：[196, 36,000,000]，超出自动等比缩放。
+
+### 视频
+
+| 方式 | 字段 | 限制 |
+|------|------|------|
+| URL | `video_url.url` = 公网 URL | 文件 ≤ 50 MB |
+| Base64 | `video_url.url` = `data:video/mp4;base64,<内容>` | 文件 ≤ 50 MB，请求体 ≤ 64 MB |
+
+`fps` 参数控制抽帧频率，范围 [0.2, 5]，默认 1（每秒 1 帧）。
+
+支持视频格式：mp4（`video/mp4`）、avi（`video/avi`）、mov（`video/quicktime`）。暂不支持音频理解。
+
+### 文档（PDF）
+
+| 方式 | 字段 | 限制 |
+|------|------|------|
+| URL | `file_url` = 公网 URL | 文件 ≤ 50 MB |
+| Base64 | `file_data` = `data:application/pdf;base64,<内容>` + `filename` | 文件 ≤ 50 MB，请求体 ≤ 64 MB |
+
+PDF 按页分割为多图后输入模型，预处理不缩放分辨率以保留原始信息。
+
+---
+
+## 流式响应格式
+
+流式响应基于 SSE 协议，每个数据块格式如下：
+
+```
+data: {"choices":[{"delta":{"content":"文本片段","role":"assistant"},"index":0}],"id":"...","model":"..."}
+```
+
+关键字段：
+
+| 字段 | 说明 |
+|------|------|
+| `choices[0].delta.content` | 模型生成的文本增量 |
+| `choices[0].delta.reasoning_content` | 思维链增量（深度思考模型） |
+| `choices[0].finish_reason` | 停止原因，仅最后一个 chunk 出现（`stop` / `length` / `tool_calls`） |
+
+响应以 `data: [DONE]` 结束。
+
+---
+
+## 结构化输出
+
+通过 `response_format` 指定 JSON 输出格式（beta）。
+
+### 模式对比
+
+| | `json_schema` | `json_object` |
+|---|---|---|
+| 生成合法 JSON | ✓ | ✓ |
+| 可定义字段结构 | ✓ | ✗ |
+| 推荐使用 | **是** | 否 |
+| 配置方式 | `{"type": "json_schema", "json_schema": {"name": "...", "strict": true, "schema": {...}}}` | `{"type": "json_object"}` |
+
+> `json_object` 模式需在 prompt 中包含"json"字样。
+
+### JSON Schema 支持的关键字
+
+**通用：** `type`（integer/number/string/boolean/null/array/object）、`$ref`（仅本地引用）、`$defs`、`const`、`enum`、`anyOf`、`oneOf`、`allOf`
+
+**array 类型：** `prefixItems`、`items`、`unevaluatedItems`
+
+**object 类型：** `properties`、`required`、`additionalProperties`、`unevaluatedProperties`
+
+> 不可与 `frequency_penalty`、`presence_penalty` 等采样参数同时使用。
+
+### Schema 定义建议
+
+- 字段用清晰有意义的英文名，配合 `description` 说明用途
+- 类型贴合业务实际（数字用 `integer`/`number`，不要用 `string` 替代）
+- 枚举值用 `enum` 明确约束，避免幻觉
+- 所有需要的字段加入 `required`，同时设置 `"additionalProperties": false`
+- prompt 只描述任务目标，不重复 schema 结构信息

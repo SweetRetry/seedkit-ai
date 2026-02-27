@@ -3,8 +3,6 @@ import {
   SharedV3Warning,
   UnsupportedFunctionalityError,
 } from '@ai-sdk/provider';
-import { validateTypes } from '@ai-sdk/provider-utils';
-import { webSearchArgsSchema } from '../tool/web-search';
 
 export type VolcengineToolChoice =
   | 'auto'
@@ -12,23 +10,14 @@ export type VolcengineToolChoice =
   | 'required'
   | { type: 'function'; function: { name: string } };
 
-export type VolcengineTool =
-  | {
-      type: 'function';
-      function: {
-        name: string;
-        description: string | undefined;
-        parameters: unknown;
-      };
-    }
-  | {
-      type: 'web_search';
-      web_search?: {
-        max_keyword?: number;
-        limit?: number;
-        max_tool_calls?: number;
-      };
-    };
+export type VolcengineTool = {
+  type: 'function';
+  function: {
+    name: string;
+    description: string | undefined;
+    parameters: unknown;
+  };
+};
 
 export async function prepareTools({
   tools,
@@ -54,32 +43,10 @@ export async function prepareTools({
 
   for (const tool of tools) {
     if (tool.type === 'provider') {
-      const toolId = tool.id;
-
-      switch (toolId) {
-        case 'volcengine.web_search': {
-          const args = await validateTypes({
-            value: tool.args,
-            schema: webSearchArgsSchema,
-          });
-
-          volcengineTools.push({
-            type: 'web_search',
-            web_search: {
-              max_keyword: args.maxKeyword,
-              limit: args.limit,
-              max_tool_calls: args.maxToolCalls,
-            },
-          });
-          break;
-        }
-
-        default:
-          toolWarnings.push({
-            type: 'unsupported',
-            feature: `provider-defined tool ${toolId}`,
-          });
-      }
+      toolWarnings.push({
+        type: 'unsupported',
+        feature: `provider-defined tool ${tool.id}`,
+      });
     } else {
       volcengineTools.push({
         type: 'function',

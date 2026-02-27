@@ -245,7 +245,9 @@ export class VolcengineChatLanguageModel implements LanguageModelV3 {
       args: removeUndefinedEntries({
         model: this.modelId,
         messages,
-        max_tokens: maxOutputTokens,
+        ...(options.maxCompletionTokens != null
+          ? { max_completion_tokens: options.maxCompletionTokens }
+          : { max_tokens: maxOutputTokens }),
         temperature,
         top_p: topP,
         seed,

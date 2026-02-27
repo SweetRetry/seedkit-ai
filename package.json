@@ -63,7 +63,7 @@
     "vitest": "^4.0.16"
   },
   "dependencies": {
-    "@ai-sdk/provider": "^3.0.2",
+    "@ai-sdk/provider": "^3.0.8",
     "@ai-sdk/provider-utils": "^4.0.5",
     "zod": "^4.3.5"
   }

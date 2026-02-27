@@ -1,4 +1,5 @@
 import {
+  Experimental_VideoModelV3,
   ImageModelV3,
   LanguageModelV3,
   NoSuchModelError,
@@ -13,7 +14,11 @@ import {
 import { VERSION } from './version';
 import { VolcengineChatLanguageModel, VolcengineModelId } from './chat';
 import { VolcengineImageModel, VolcengineImageModelId } from './image';
-import { volcengineTools } from './volcengine-tools';
+import {
+  VolcengineResponsesLanguageModel,
+  VolcengineResponsesModelId,
+} from './responses';
+import { VolcengineVideoModel, VolcengineVideoModelId } from './video';
 
 export interface VolcengineProviderSettings {
   /**
@@ -43,12 +48,12 @@ or to provide a custom fetch implementation for e.g. testing.
 }
 
 export interface VolcengineProvider extends ProviderV3 {
-  (modelId: VolcengineModelId): LanguageModelV3;
+  (modelId: VolcengineResponsesModelId): LanguageModelV3;
 
   /**
-Creates a model for text generation using the Chat Completions API.
+Creates a model for text generation using the Responses API.
 */
-  languageModel(modelId: VolcengineModelId): LanguageModelV3;
+  languageModel(modelId: VolcengineResponsesModelId): LanguageModelV3;
 
   /**
 Creates a model for text generation using the Chat Completions API.
@@ -56,19 +61,24 @@ Creates a model for text generation using the Chat Completions API.
   chat(modelId: VolcengineModelId): LanguageModelV3;
 
   /**
+Creates a model for text generation using the Responses API.
+*/
+  responses(modelId: VolcengineResponsesModelId): LanguageModelV3;
+
+  /**
 Creates a model for image generation.
 */
   imageModel(modelId: VolcengineImageModelId): ImageModelV3;
 
   /**
+Creates a model for video generation (Seedance series).
+*/
+  videoModel(modelId: VolcengineVideoModelId): Experimental_VideoModelV3;
+
+  /**
 Creates a model for text embeddings.
 */
   embeddingModel(modelId: VolcengineModelId): never;
-
-  /**
-Volcengine-specific tools.
-*/
-  tools: typeof volcengineTools;
 }
 
 /**
@@ -111,18 +121,35 @@ export function createVolcengine(
       fetch: options.fetch,
     });
 
-  const provider = function (modelId: VolcengineModelId) {
-    return createChatModel(modelId);
+  const createResponsesModel = (modelId: string) =>
+    new VolcengineResponsesLanguageModel(modelId, {
+      provider: 'volcengine.responses',
+      baseURL,
+      headers: getHeaders,
+      fetch: options.fetch,
+    });
+
+  const createVideoModel = (modelId: string) =>
+    new VolcengineVideoModel(modelId, {
+      provider: 'volcengine.video',
+      baseURL,
+      headers: getHeaders,
+      fetch: options.fetch,
+    });
+
+  const provider = function (modelId: VolcengineResponsesModelId) {
+    return createResponsesModel(modelId);
   };
 
   provider.specificationVersion = 'v3' as const;
-  provider.languageModel = createChatModel;
+  provider.languageModel = createResponsesModel;
   provider.chat = createChatModel;
+  provider.responses = createResponsesModel;
   provider.imageModel = createImageModel;
+  provider.videoModel = createVideoModel;
   provider.embeddingModel = (modelId: string) => {
     throw new NoSuchModelError({ modelId, modelType: 'embeddingModel' });
   };
-  provider.tools = volcengineTools;
 
   return provider as VolcengineProvider;
 }
