@@ -1,0 +1,90 @@
+---
+title: AI SDK Provider
+description: 在 Vercel AI SDK 中使用豆包大模型的提供商适配器。
+---
+
+`@seed-kit/ai-sdk-provider` 是豆包大模型的 [Vercel AI SDK](https://sdk.vercel.ai/) 提供商，让你可以在 AI SDK 标准接口下调用豆包的对话、图像、视频生成能力。
+
+## 安装
+
+```bash
+npm install @seed-kit/ai-sdk-provider
+# 或
+pnpm add @seed-kit/ai-sdk-provider
+```
+
+## 配置
+
+通过环境变量设置 API Key：
+
+```bash
+ARK_API_KEY=your_api_key_here
+```
+
+或在代码中直接传入：
+
+```ts
+import { createSeed } from '@seed-kit/ai-sdk-provider';
+
+const seed = createSeed({
+  apiKey: 'your_api_key_here',
+});
+```
+
+## 快速开始
+
+```ts
+import { seed } from '@seed-kit/ai-sdk-provider';
+import { generateText } from 'ai';
+
+const { text } = await generateText({
+  model: seed('doubao-seed-1-6-251015'),
+  prompt: '你好！',
+});
+
+console.log(text);
+```
+
+## 流式输出
+
+```ts
+import { seed } from '@seed-kit/ai-sdk-provider';
+import { streamText } from 'ai';
+
+const result = streamText({
+  model: seed('doubao-seed-1-6-251015'),
+  prompt: '用一句话介绍自己',
+});
+
+for await (const chunk of result.textStream) {
+  process.stdout.write(chunk);
+}
+```
+
+## 图像生成
+
+```ts
+import { seed } from '@seed-kit/ai-sdk-provider';
+import { generateImage } from 'ai';
+
+const { image } = await generateImage({
+  model: seed.image('seedream-3-0-t2i-250415'),
+  prompt: '一只猫坐在窗边看雨',
+});
+```
+
+## 视频生成
+
+```ts
+import { seed } from '@seed-kit/ai-sdk-provider';
+import { generateVideo } from 'ai';
+
+const { video } = await generateVideo({
+  model: seed.video('seedance-1-lite-t2v-250428'),
+  prompt: '海浪拍打礁石，慢镜头',
+});
+```
+
+## GitHub
+
+[SweetRetry/seed-kit](https://github.com/SweetRetry/seed-kit)

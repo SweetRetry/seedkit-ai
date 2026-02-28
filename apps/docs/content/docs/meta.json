@@ -1,4 +1,4 @@
 {
   "title": "文档",
-  "pages": ["index", "text-gen", "text-gen-responses", "image-gen", "video-gen"]
+  "pages": ["index", "text-gen", "text-gen-responses", "image-gen", "video-gen", "sdk"]
 }
