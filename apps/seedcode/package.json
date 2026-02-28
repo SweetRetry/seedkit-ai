@@ -3,10 +3,11 @@
   "version": "0.0.1",
   "description": "A code CLI powered by ByteDance Seed 2.0",
   "keywords": ["cli", "code", "bytedance", "seed", "volcengine", "ai"],
-  "homepage": "https://github.com/sweetRetry/ai-sdk-volcengine-adapter",
+  "homepage": "https://github.com/SweetRetry/seed-kit#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sweetRetry/ai-sdk-volcengine-adapter"
+    "url": "git+https://github.com/SweetRetry/seed-kit.git",
+    "directory": "apps/seedcode"
   },
   "license": "MIT",
   "bin": {
