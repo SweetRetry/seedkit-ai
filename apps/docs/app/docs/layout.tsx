@@ -8,8 +8,8 @@ export default function Layout({ children }: { children: ReactNode }) {
     <RootProvider>
       <DocsLayout
         tree={source.pageTree}
-        nav={{ title: 'Volcengine Ark Docs' }}
-        githubUrl="https://github.com/SweetRetry/ai-sdk-volcengine-adapter"
+        nav={{ title: 'Seed API 文档' }}
+        githubUrl="https://github.com/SweetRetry/seed-kit"
       >
         {children}
       </DocsLayout>

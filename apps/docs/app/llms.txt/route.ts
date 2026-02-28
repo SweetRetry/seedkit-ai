@@ -6,9 +6,9 @@ export async function GET() {
   const pages = source.getPages();
 
   const lines = [
-    '# AI SDK Volcengine Adapter 文档',
+    '# Seed 大模型 API 文档',
     '',
-    '> Volcengine (豆包) 的 Vercel AI SDK 适配器',
+    '> Seed 大模型 API 参考文档，涵盖对话生成、图像生成和视频生成。',
     '',
     '## 文档页面',
     '',
