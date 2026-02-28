@@ -35,13 +35,47 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
   const yaml = match[1];
   const result: Record<string, string> = {};
 
+  let currentKey: string | null = null;
+  let isFolded = false;
+  const foldedLines: string[] = [];
+
+  const flushFolded = () => {
+    if (currentKey && isFolded) {
+      result[currentKey] = foldedLines.join(' ').replace(/\s+/g, ' ').trim();
+    }
+    foldedLines.length = 0;
+    isFolded = false;
+  };
+
   for (const line of yaml.split('\n')) {
+    // Continuation line for a folded scalar (starts with whitespace)
+    if (isFolded && /^\s+\S/.test(line)) {
+      foldedLines.push(line.trim());
+      continue;
+    }
+
+    // End of folded block — flush before processing new key
+    if (isFolded) flushFolded();
+
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
+
     const key = line.slice(0, colonIdx).trim();
-    const value = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, '');
-    if (key) result[key] = value;
+    if (!key) continue;
+
+    const rawValue = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, '');
+
+    if (rawValue === '>') {
+      // YAML folded block scalar
+      currentKey = key;
+      isFolded = true;
+    } else {
+      currentKey = key;
+      result[key] = rawValue;
+    }
   }
+
+  if (isFolded) flushFolded();
 
   return result;
 }

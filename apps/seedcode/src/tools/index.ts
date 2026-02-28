@@ -9,8 +9,9 @@ import { runBash } from './bash.js';
 import { webSearch, webFetch } from '@seedkit-ai/tools';
 import { captureScreenshot, getDisplayList } from './screenshot.js';
 import { createTodoStore } from './todo.js';
+import { loadSkillBody, type SkillEntry } from '../context/skills.js';
 
-export type ToolName = 'read' | 'edit' | 'write' | 'glob' | 'grep' | 'bash' | 'webSearch' | 'webFetch' | 'listDisplays' | 'screenshot' | 'todoWrite' | 'todoRead' | 'askQuestion';
+export type ToolName = 'read' | 'edit' | 'write' | 'glob' | 'grep' | 'bash' | 'webSearch' | 'webFetch' | 'listDisplays' | 'screenshot' | 'todoWrite' | 'todoRead' | 'askQuestion' | 'loadSkill';
 
 export { createTodoStore };
 export type { TodoStore, TodoItem } from './todo.js';
@@ -58,8 +59,9 @@ export function buildTools(opts: {
   askQuestion: AskQuestionFn;
   skipConfirm: boolean;
   todoStore: ReturnType<typeof createTodoStore>;
+  availableSkills: SkillEntry[];
 }) {
-  const { cwd, confirm, askQuestion, skipConfirm, todoStore } = opts;
+  const { cwd, confirm, askQuestion, skipConfirm, todoStore, availableSkills } = opts;
 
   const requestConfirm = (
     toolName: ToolName,
@@ -301,6 +303,23 @@ export function buildTools(opts: {
             resolve: (answer) => resolve({ answer }),
           });
         });
+      },
+    }),
+
+    loadSkill: tool({
+      description:
+        'Load the full instructions for a skill by name. Call this when the user invokes a skill (e.g. /color-palette) to read its complete guidance before proceeding.',
+      inputSchema: z.object({
+        name: z.string().describe('The skill name to load (e.g. "color-palette")'),
+      }),
+      execute: async ({ name }): Promise<{ body: string; truncated: boolean } | ToolError> => {
+        const skill = availableSkills.find((s) => s.name === name);
+        if (!skill) {
+          return { error: `Skill not found: "${name}". Available skills: ${availableSkills.map((s) => s.name).join(', ') || 'none'}` };
+        }
+        const result = loadSkillBody(skill);
+        if (!result) return { error: `Could not read skill file for: "${name}"` };
+        return result;
       },
     }),
 

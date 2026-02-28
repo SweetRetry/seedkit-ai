@@ -10,6 +10,21 @@ import type { AgentContext } from './useAgentContext.js';
 
 const MAX_TOOL_STEPS = 20;
 
+const CONTEXT_LIMIT = 256_000;
+/** Start warning in StatusBar above this fraction */
+export const CONTEXT_WARN_THRESHOLD = 0.75;
+/** Auto-compact before sending when estimated usage exceeds this fraction */
+const CONTEXT_COMPACT_THRESHOLD = 0.85;
+
+/** Rough token estimate: 4 chars per token */
+function estimateTokens(systemPrompt: string, messages: ModelMessage[]): number {
+  return Math.ceil((systemPrompt.length + JSON.stringify(messages).length) / 4);
+}
+
+export function estimateContextPct(systemPrompt: string, messages: ModelMessage[]): number {
+  return estimateTokens(systemPrompt, messages) / CONTEXT_LIMIT;
+}
+
 interface UseAgentStreamOptions {
   cwd: string;
   skipConfirm: boolean;
@@ -53,6 +68,8 @@ function buildToolDescription(toolName: string, input: Record<string, unknown>):
       return input.id ? `update task ${input.id}` : `create: ${input.subject}`;
     case 'todoRead':
       return input.id ? `read task ${input.id}` : 'list all tasks';
+    case 'loadSkill':
+      return String(input.name ?? '');
     default:
       return JSON.stringify(input);
   }
@@ -81,7 +98,7 @@ export function useAgentStream({
       dispatch({ type: 'SET_PENDING_QUESTION', pending });
     };
 
-    const tools = buildTools({ cwd, confirm, askQuestion, skipConfirm, todoStore: todoStore.current });
+    const tools = buildTools({ cwd, confirm, askQuestion, skipConfirm, todoStore: todoStore.current, availableSkills: context.availableSkillsRef.current });
 
     const scheduleFlush = (text: string, done: boolean) => {
       accumulated = text;
@@ -105,6 +122,16 @@ export function useAgentStream({
         dispatch({ type: 'REASONING_TICK', text: accReasoning });
       }, 80);
     };
+
+    // Auto-compact if estimated context exceeds threshold
+    const contextPct = estimateContextPct(context.getEffectiveSystemPrompt(), messages.current);
+    if (contextPct >= CONTEXT_COMPACT_THRESHOLD) {
+      dispatch({
+        type: 'PUSH_STATIC',
+        entry: { type: 'info', content: `⚡ Context at ${Math.round(contextPct * 100)}% — auto-compacting before continuing...` },
+      });
+      await compactCore(cfg);
+    }
 
     // Inject pending media (screenshots) as user message parts
     const pendingMediaIds = allMediaIds();
@@ -221,14 +248,13 @@ export function useAgentStream({
     inFlight.current = false;
   };
 
-  const runCompact = async (cfg: Config) => {
+  /** Core compact logic — does not touch inFlight or STREAM_START/END. */
+  const compactCore = async (cfg: Config): Promise<void> => {
     if (messages.current.length === 0) {
       dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: 'Nothing to compact.' } });
       return;
     }
 
-    inFlight.current = true;
-    dispatch({ type: 'STREAM_START' });
     dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: '⏳ Compacting conversation...' } });
 
     try {
@@ -253,7 +279,12 @@ export function useAgentStream({
       const msg = err instanceof Error ? err.message : String(err);
       dispatch({ type: 'PUSH_STATIC', entry: { type: 'error', content: `Compact failed: ${msg}` } });
     }
+  };
 
+  const runCompact = async (cfg: Config) => {
+    inFlight.current = true;
+    dispatch({ type: 'STREAM_START' });
+    await compactCore(cfg);
     inFlight.current = false;
     dispatch({ type: 'STREAM_END' });
   };

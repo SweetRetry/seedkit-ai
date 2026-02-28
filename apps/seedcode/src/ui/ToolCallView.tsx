@@ -37,11 +37,11 @@ export function ToolCallLine({ entry, onConfirm }: ToolCallLineProps) {
   );
 
   const icon = {
-    pending: '◆',
-    running: '◆',
-    done: '◆',
+    pending: '○',
+    running: '◌',
+    done: '●',
     error: '✕',
-    denied: '◆',
+    denied: '◌',
   }[entry.status];
 
   const iconColor = {
@@ -52,36 +52,35 @@ export function ToolCallLine({ entry, onConfirm }: ToolCallLineProps) {
     denied: 'gray',
   }[entry.status] as string;
 
-  const statusSuffix = {
+  const statusLabel = {
     pending: '',
-    running: ' ...',
-    done: ' ✔',
-    error: ' ✕',
-    denied: ' (denied)',
+    running: 'running',
+    done: 'done',
+    error: 'error',
+    denied: 'denied',
   }[entry.status];
 
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Box>
-        <Text color={iconColor}>{icon}  </Text>
-        <Text color="cyan" bold>{`[ ${entry.toolName} ] `}</Text>
-        <Text>{entry.description}</Text>
-        <Text dimColor>{statusSuffix}</Text>
+    <Box flexDirection="column" marginTop={1} paddingX={1}>
+      <Box gap={1}>
+        <Text color={iconColor}>{icon}</Text>
+        <Text color={iconColor} bold>{entry.toolName}</Text>
+        <Text dimColor>{entry.description}</Text>
+        {statusLabel && <Text dimColor>· {statusLabel}</Text>}
       </Box>
 
       {entry.status === 'pending' && (
-        <Box marginLeft={3}>
-          <Text color="yellow">│  Apply? </Text>
+        <Box marginLeft={2} gap={1}>
+          <Text dimColor>apply?</Text>
           <Text bold color="green">y</Text>
           <Text dimColor>/</Text>
           <Text bold color="red">n</Text>
-          <Text dimColor> › </Text>
         </Box>
       )}
 
       {entry.status === 'error' && entry.output && (
-        <Box marginLeft={3}>
-          <Text color="red">{entry.output}</Text>
+        <Box marginLeft={2}>
+          <Text color="red" dimColor>{entry.output}</Text>
         </Box>
       )}
     </Box>

@@ -22,7 +22,7 @@ export function MessageList({ staticTurns, activeTurn, activeReasoning, isThinki
   return (
     <>
       {staticTurns.length === 0 && !activeTurn && !isThinking && (
-        <Box marginBottom={1}>
+        <Box marginBottom={1} paddingX={1}>
           <Text dimColor>Type /help for available commands.</Text>
         </Box>
       )}
@@ -37,12 +37,15 @@ export function MessageList({ staticTurns, activeTurn, activeReasoning, isThinki
       )}
 
       {activeTurn && (
-        <Box marginTop={1} flexDirection="column">
-          <Text color="green" bold>{'seed '}</Text>
+        <Box marginTop={1} flexDirection="column" paddingX={1}>
+          <Box gap={1}>
+            <Text color="green" bold>●</Text>
+            <Text color="green" bold>seed</Text>
+          </Box>
           {/* Don't render markdown while streaming — content is incomplete */}
-          <Box>
+          <Box marginLeft={3}>
             <Text>{activeTurn.content}</Text>
-            <Text color="green">▋</Text>
+            <Text color="green">▌</Text>
           </Box>
         </Box>
       )}
@@ -57,17 +60,19 @@ function ThinkingBlockLive({ text }: { text: string }) {
   const visibleLines = lines.slice(-MAX_LIVE_REASONING_LINES);
 
   return (
-    <Box marginTop={1} flexDirection="column">
-      <Box>
-        <Text color="magenta" bold>{'think'}</Text>
-        <Text color="magenta"> ···</Text>
+    <Box marginTop={1} flexDirection="column" paddingX={1}>
+      <Box gap={1}>
+        <Text color="magenta">◈</Text>
+        <Text color="magenta" dimColor>thinking…</Text>
       </Box>
-      <Box flexDirection="column" marginLeft={2}>
-        {visibleLines.map((line, i) => (
-          <Text key={i} color="magenta" dimColor>
-            {line}
-          </Text>
-        ))}
+      <Box flexDirection="column" marginLeft={3} borderStyle="single" borderColor="magenta" borderLeft borderRight={false} borderTop={false} borderBottom={false}>
+        <Box paddingLeft={1} flexDirection="column">
+          {visibleLines.map((line, i) => (
+            <Text key={i} dimColor>
+              {line}
+            </Text>
+          ))}
+        </Box>
       </Box>
     </Box>
   );
@@ -82,9 +87,9 @@ function ThinkingBlockSummary({ text }: { text: string }) {
       : firstLine;
 
   return (
-    <Box marginLeft={2} marginBottom={0}>
-      <Text color="magenta" dimColor>{'✦ '}</Text>
-      <Text color="magenta" dimColor>{summary}</Text>
+    <Box marginLeft={3} marginBottom={0} gap={1}>
+      <Text color="magenta" dimColor>◈</Text>
+      <Text dimColor>{summary}</Text>
     </Box>
   );
 }
@@ -93,32 +98,38 @@ function TurnView({ turn }: { turn: TurnEntry }) {
   switch (turn.type) {
     case 'user':
       return (
-        <Box marginTop={1}>
-          <Text color="cyan" bold>{'you  '}</Text>
+        <Box marginTop={1} paddingX={1} gap={1}>
+          <Text color="cyan" bold>▸</Text>
+          <Text color="cyan" bold>you</Text>
           <Text>{turn.content}</Text>
         </Box>
       );
 
     case 'assistant':
       return (
-        <Box marginTop={1} flexDirection="column">
-          <Text color="green" bold>{'seed '}</Text>
+        <Box marginTop={1} paddingX={1} flexDirection="column">
+          <Box gap={1}>
+            <Text color="green" bold>●</Text>
+            <Text color="green" bold>seed</Text>
+          </Box>
           {turn.reasoning && <ThinkingBlockSummary text={turn.reasoning} />}
-          <Text>{turn.done ? renderMarkdown(turn.content) : turn.content}</Text>
+          <Box marginLeft={3}>
+            <Text>{turn.done ? renderMarkdown(turn.content) : turn.content}</Text>
+          </Box>
         </Box>
       );
 
     case 'error':
       return (
-        <Box marginTop={1}>
-          <Text color="red">{'✕    '}</Text>
+        <Box marginTop={1} paddingX={1} gap={1}>
+          <Text color="red">✕</Text>
           <Text color="red">{turn.content}</Text>
         </Box>
       );
 
     case 'info':
       return (
-        <Box marginTop={1}>
+        <Box marginTop={1} paddingX={1}>
           <Text dimColor>{turn.content}</Text>
         </Box>
       );

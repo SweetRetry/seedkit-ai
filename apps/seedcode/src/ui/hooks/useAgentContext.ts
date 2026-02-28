@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect } from 'react';
-import { buildContext, buildContextWithSkill, type SkillEntry } from '../../context/index.js';
+import { buildContext, type SkillEntry } from '../../context/index.js';
 import { createSession } from '../../sessions/index.js';
 import type { Action } from '../replReducer.js';
 
@@ -11,7 +11,6 @@ interface UseAgentContextOptions {
 export interface AgentContext {
   systemPromptRef: React.MutableRefObject<string>;
   availableSkillsRef: React.MutableRefObject<SkillEntry[]>;
-  activeSkillsRef: React.MutableRefObject<SkillEntry[]>;
   sessionIdRef: React.MutableRefObject<string>;
   getEffectiveSystemPrompt: () => string;
   loadContext: () => void;
@@ -20,14 +19,13 @@ export interface AgentContext {
 export function useAgentContext({ cwd, dispatch }: UseAgentContextOptions): AgentContext {
   const systemPromptRef = useRef<string>('');
   const availableSkillsRef = useRef<SkillEntry[]>([]);
-  const activeSkillsRef = useRef<SkillEntry[]>([]);
   const sessionIdRef = useRef<string>(createSession(cwd));
 
   const loadContext = useCallback(() => {
     const result = buildContext(cwd);
     systemPromptRef.current = result.systemPrompt;
     availableSkillsRef.current = result.skills;
-    activeSkillsRef.current = [];
+    dispatch({ type: 'SET_AVAILABLE_SKILLS', skills: result.skills });
     for (const warning of result.warnings) {
       dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: `⚠  ${warning}` } });
     }
@@ -35,13 +33,7 @@ export function useAgentContext({ cwd, dispatch }: UseAgentContextOptions): Agen
 
   useEffect(() => { loadContext(); }, [loadContext]);
 
-  const getEffectiveSystemPrompt = useCallback((): string => {
-    let prompt = systemPromptRef.current;
-    for (const skill of activeSkillsRef.current) {
-      prompt = buildContextWithSkill(prompt, skill);
-    }
-    return prompt;
-  }, []);
+  const getEffectiveSystemPrompt = useCallback((): string => systemPromptRef.current, []);
 
-  return { systemPromptRef, availableSkillsRef, activeSkillsRef, sessionIdRef, getEffectiveSystemPrompt, loadContext };
+  return { systemPromptRef, availableSkillsRef, sessionIdRef, getEffectiveSystemPrompt, loadContext };
 }

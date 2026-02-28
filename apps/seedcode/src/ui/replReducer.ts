@@ -2,6 +2,7 @@ import type { Config } from '../config/schema.js';
 import type { PendingConfirm, PendingQuestion } from '../tools/index.js';
 import type { ToolCallEntry } from './ToolCallView.js';
 import type { SessionEntry } from '../sessions/index.js';
+import type { SkillEntry } from '../context/index.js';
 
 export type TurnEntry =
   | { type: 'user'; content: string }
@@ -21,6 +22,7 @@ export interface AppState {
   liveConfig: Config;
   totalTokens: number;
   waitingForModel: boolean;
+  availableSkills: SkillEntry[];
   resumeSessions: SessionEntry[] | null;
 }
 
@@ -42,6 +44,7 @@ export type Action =
   | { type: 'ADD_TOKENS'; count: number }
   | { type: 'SET_TOTAL_TOKENS'; count: number }
   | { type: 'SET_WAITING_FOR_MODEL'; value: boolean }
+  | { type: 'SET_AVAILABLE_SKILLS'; skills: SkillEntry[] }
   | { type: 'SET_RESUME_SESSIONS'; sessions: SessionEntry[] | null }
   | { type: 'CLEAR' };
 
@@ -124,6 +127,9 @@ export function replReducer(state: AppState, action: Action): AppState {
 
     case 'SET_WAITING_FOR_MODEL':
       return { ...state, waitingForModel: action.value };
+
+    case 'SET_AVAILABLE_SKILLS':
+      return { ...state, availableSkills: action.skills };
 
     case 'SET_RESUME_SESSIONS':
       return { ...state, resumeSessions: action.sessions };

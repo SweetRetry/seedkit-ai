@@ -44,28 +44,30 @@ function getSuggestions(
 ): Suggestion[] | null {
   if (!val.startsWith('/')) return null;
   const raw = val.slice(1);
-
-  if (raw.toLowerCase().startsWith('skills:')) {
-    const query = raw.slice('skills:'.length).toLowerCase();
-    const matches = skills.filter((s) => s.name.toLowerCase().startsWith(query));
-    if (matches.length === 0) return null;
-    if (matches.length === 1 && matches[0].name.toLowerCase() === query) return null;
-    return matches.map((s) => ({
-      label: `/skills:${s.name}`,
-      complete: `/skills:${s.name}`,
-      desc: `[${s.scope[0]}]`,
-    }));
-  }
-
   if (raw.includes(' ')) return null;
+
   const query = raw.toLowerCase();
-  const matches = SLASH_COMMANDS.filter((c) => c.name.startsWith(query));
-  if (matches.length === 0 || (matches.length === 1 && matches[0].name === query)) return null;
-  return matches.map((c) => ({
+
+  const cmdMatches = SLASH_COMMANDS.filter((c) => c.name.startsWith(query));
+  // Match skills by the full "/skills:<name>" path prefix, so "/skill" matches all "/skills:xxx"
+  const skillMatches = skills.filter((s) => `skills:${s.name}`.startsWith(query));
+
+  const cmdSuggestions: Suggestion[] = cmdMatches.map((c) => ({
     label: `/${c.name}${c.args ? ' ' + c.args : ''}`,
     complete: c.args ? `/${c.name} ` : `/${c.name}`,
     desc: c.desc,
   }));
+  const skillSuggestions: Suggestion[] = skillMatches.map((s) => ({
+    label: `/skills:${s.name}`,
+    complete: `/skills:${s.name} `,  // trailing space: fill input, don't auto-submit
+    desc: `skill [${s.scope[0]}]`,
+  }));
+
+  const all = [...cmdSuggestions, ...skillSuggestions];
+  if (all.length === 0) return null;
+  // Suppress when the sole match is a perfect command hit with no skill matches
+  if (all.length === 1 && cmdMatches.length === 1 && cmdMatches[0].name === query && skillMatches.length === 0) return null;
+  return all;
 }
 
 export function InputBox({

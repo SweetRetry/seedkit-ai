@@ -18,14 +18,10 @@ export type SlashCommandResult =
   | { type: 'model_change'; model: string }
   | { type: 'model_picker' }
   | { type: 'thinking_toggle' }
-  | { type: 'skill_activate'; skillName: string }
   | { type: 'compact' }
   | { type: 'resume'; sessionId: string }
   | { type: 'resume_picker' }
   | { type: 'not_command' };
-
-/** `/skills:<name>` pattern */
-const SKILLS_ACTIVATE_RE = /^skills:(.+)$/i;
 
 export interface SessionState {
   config: Config;
@@ -33,9 +29,11 @@ export interface SessionState {
   version: string;
   totalTokens: number;
   availableSkills: SkillEntry[];
-  activeSkills: SkillEntry[];
   sessionId: string;
   cwd: string;
+  systemPrompt: string;
+  /** Serialised byte length of the current message history (for token estimation) */
+  messageHistoryChars: number;
 }
 
 export function handleSlashCommand(
@@ -46,12 +44,6 @@ export function handleSlashCommand(
 
   const raw = input.slice(1).trim();
   const [cmd, ...args] = raw.split(/\s+/);
-
-  // /skills:<name> — activate a skill directly
-  const skillMatch = SKILLS_ACTIVATE_RE.exec(raw);
-  if (skillMatch) {
-    return { type: 'skill_activate', skillName: skillMatch[1].trim() };
-  }
 
   switch (cmd.toLowerCase()) {
     case 'exit':
@@ -79,6 +71,9 @@ export function handleSlashCommand(
     case 'skills':
       return { type: 'handled', output: buildSkillsList(state) };
 
+    case 'context':
+      return { type: 'handled', output: buildContextInfo(state) };
+
     case 'compact':
       return { type: 'compact' };
 
@@ -94,16 +89,15 @@ export function handleSlashCommand(
     }
 
     default:
-      return {
-        type: 'handled',
-        output: `Unknown command: /${cmd}. Type /help for available commands.`,
-      };
+      // /skills:<name> and any unrecognised slash-prefixed text are passed through as normal messages
+      return { type: 'not_command' };
   }
 }
 
 export const SLASH_COMMANDS: Array<{ name: string; args?: string; desc: string }> = [
   { name: 'help',     desc: 'show commands' },
   { name: 'status',   desc: 'session info + token usage' },
+  { name: 'context',  desc: 'show system prompt token breakdown' },
   { name: 'clear',    desc: 'reset history, reload context' },
   { name: 'sessions', desc: 'list past sessions for this directory' },
   { name: 'resume',   args: '<id>', desc: 'resume a past session' },
@@ -123,12 +117,12 @@ function buildHelp(): string {
 }
 
 function buildStatus(state: SessionState): string {
-  const { config, turnCount, version, totalTokens, activeSkills, sessionId } = state;
+  const { config, turnCount, version, totalTokens, sessionId } = state;
   const maskedKey = config.apiKey
     ? config.apiKey.slice(0, 6) + '...' + config.apiKey.slice(-4)
     : '✗ not set';
 
-  const lines = [
+  return [
     'Session Status:',
     `  Version:        ${version}`,
     `  Session ID:     ${sessionId.slice(0, 8)}`,
@@ -137,30 +131,78 @@ function buildStatus(state: SessionState): string {
     `  Thinking:       ${config.thinking ? 'on' : 'off'}`,
     `  Turns:          ${turnCount}`,
     `  Tokens (est):   ${totalTokens > 0 ? totalTokens.toLocaleString() : 'n/a'}`,
-  ];
-
-  if (activeSkills.length > 0) {
-    lines.push(`  Active skills:  ${activeSkills.map((s) => s.name).join(', ')}`);
-  }
-
-  return lines.join('\n');
+  ].join('\n');
 }
 
 function buildSkillsList(state: SessionState): string {
-  const { availableSkills, activeSkills } = state;
+  const { availableSkills } = state;
 
   if (availableSkills.length === 0) {
     return 'No skills. Add SKILL.md files to ~/.agents/skills/ or .seedcode/skills/';
   }
 
-  const activeNames = new Set(activeSkills.map((s) => s.name));
   return availableSkills
     .map((s) => {
-      const active = activeNames.has(s.name) ? ' ✓' : '';
       const scope = s.scope === 'project' ? 'p' : 'g';
-      return `  ${s.name} [${scope}]${active}`;
+      return `  /skills:${s.name} [${scope}]`;
     })
     .join('\n');
+}
+
+function buildContextInfo(state: SessionState): string {
+  const { systemPrompt, availableSkills, messageHistoryChars, turnCount } = state;
+
+  const est = (chars: number) => Math.ceil(chars / 4);
+  const bar = (tokens: number, scale: number) =>
+    '█'.repeat(Math.min(Math.round(tokens / scale), 40));
+
+  const systemTokens = est(systemPrompt.length);
+  const historyTokens = est(messageHistoryChars);
+  const totalTokens = systemTokens + historyTokens;
+  const contextLimit = 256_000;
+  const pct = ((totalTokens / contextLimit) * 100).toFixed(1);
+
+  const lines: string[] = ['Context Window Usage:', ''];
+
+  // ── Top-level summary ──────────────────────────────────────────────────
+  const scale = Math.max(Math.ceil(totalTokens / 400), 50);
+  lines.push(`  ${'System prompt'.padEnd(22)} ~${systemTokens.toLocaleString().padStart(6)} tok  ${bar(systemTokens, scale)}`);
+  lines.push(`  ${'Message history'.padEnd(22)} ~${historyTokens.toLocaleString().padStart(6)} tok  ${bar(historyTokens, scale)}`);
+  lines.push('');
+  lines.push(`  ${'Total (est)'.padEnd(22)} ~${totalTokens.toLocaleString().padStart(6)} tok  (${pct}% of 256k)`);
+  lines.push(`  ${'Turns'.padEnd(22)}  ${turnCount}`);
+
+  // ── System prompt breakdown ────────────────────────────────────────────
+  const sections = systemPrompt.split(/\n\n---\n\n/);
+  const sectionLabels = [
+    'Base prompt',
+    'Global AGENTS.md',
+    'Project AGENTS.md',
+    'Skills (descriptions)',
+  ];
+
+  lines.push('');
+  lines.push('  System Prompt Breakdown:');
+  sections.forEach((sec, i) => {
+    const label = sectionLabels[i] ?? `Section ${i + 1}`;
+    const tokens = est(sec.length);
+    lines.push(`    ${label.padEnd(20)} ~${tokens.toLocaleString().padStart(5)} tok`);
+  });
+
+  // ── Skills detail ──────────────────────────────────────────────────────
+  if (availableSkills.length > 0) {
+    lines.push('');
+    lines.push('  Skill descriptions:');
+    for (const s of availableSkills) {
+      const skTokens = est(s.name.length + s.description.length);
+      lines.push(`    [${s.scope[0]}] ${s.name.padEnd(24)} ~${skTokens} tok`);
+    }
+    lines.push('  (Full skill body loaded on-demand via loadSkill)');
+  }
+
+  lines.push('');
+  lines.push('  Note: ~4 chars/token estimate. Actual billed tokens may differ.');
+  return lines.join('\n');
 }
 
 function buildSessionsList(state: SessionState): string {

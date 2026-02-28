@@ -16,11 +16,11 @@ export const ConfirmPrompt = memo(function ConfirmPrompt({ pending }: ConfirmPro
   );
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={1} paddingX={1}>
       {/* Header bar */}
-      <Box>
-        <Text backgroundColor="yellow" color="black" bold>{` ${pending.toolName} `}</Text>
-        <Text color="yellow" bold>  {pending.description}</Text>
+      <Box gap={2}>
+        <Text color="yellow" bold>{pending.toolName}</Text>
+        <Text dimColor>{pending.description}</Text>
       </Box>
 
       {/* Diff block */}
@@ -29,45 +29,44 @@ export const ConfirmPrompt = memo(function ConfirmPrompt({ pending }: ConfirmPro
           flexDirection="column"
           borderStyle="single"
           borderColor="gray"
-          marginTop={0}
+          marginTop={1}
           paddingX={1}
         >
           {/* removed lines */}
           {pending.diffLines.removed.slice(0, DIFF_LINES_MAX).map((line, i) => (
-            <Box key={`r${i}`}>
-              <Text color="red" bold>{'- '}</Text>
-              <Text color="red">{line}</Text>
+            <Box key={`r${i}`} gap={1}>
+              <Text color="red">-</Text>
+              <Text color="red" dimColor>{line}</Text>
             </Box>
           ))}
           {pending.diffLines.removed.length > DIFF_LINES_MAX && (
-            <Text dimColor>{`  … ${pending.diffLines.removed.length - DIFF_LINES_MAX} more removed`}</Text>
+            <Text dimColor>{`… ${pending.diffLines.removed.length - DIFF_LINES_MAX} more removed`}</Text>
           )}
 
           {/* separator when both sides present */}
           {pending.diffLines.removed.length > 0 && pending.diffLines.added.length > 0 && (
-            <Text dimColor>{'  ──'}</Text>
+            <Text dimColor>──</Text>
           )}
 
           {/* added lines */}
           {pending.diffLines.added.slice(0, DIFF_LINES_MAX).map((line, i) => (
-            <Box key={`a${i}`}>
-              <Text color="green" bold>{'+ '}</Text>
-              <Text color="green">{line}</Text>
+            <Box key={`a${i}`} gap={1}>
+              <Text color="green">+</Text>
+              <Text color="green" dimColor>{line}</Text>
             </Box>
           ))}
           {pending.diffLines.added.length > DIFF_LINES_MAX && (
-            <Text dimColor>{`  … ${pending.diffLines.added.length - DIFF_LINES_MAX} more added`}</Text>
+            <Text dimColor>{`… ${pending.diffLines.added.length - DIFF_LINES_MAX} more added`}</Text>
           )}
         </Box>
       )}
 
       {/* Prompt row */}
       <Box marginTop={1} gap={1}>
-        <Text dimColor>Apply changes?</Text>
+        <Text dimColor>apply?</Text>
         <Text bold color="green">y</Text>
-        <Text dimColor>yes ·</Text>
+        <Text dimColor>·</Text>
         <Text bold color="red">n</Text>
-        <Text dimColor>no</Text>
       </Box>
     </Box>
   );

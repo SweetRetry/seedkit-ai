@@ -1,6 +1,7 @@
 import React, { useReducer, useCallback, useRef, useEffect } from 'react';
 import { Box } from 'ink';
 import type { Config } from '../config/schema.js';
+import type { SkillEntry } from '../context/index.js';
 import { handleSlashCommand, type SessionState } from '../commands/slash.js';
 import { createTodoStore } from '../tools/index.js';
 import { resolveMentions } from '../context/mentions.js';
@@ -13,7 +14,7 @@ import { ActiveToolCallsView } from './ActiveToolCallsView.js';
 import { ConfirmPrompt } from './ConfirmPrompt.js';
 import { replReducer, type AppState } from './replReducer.js';
 import { useAgentContext } from './hooks/useAgentContext.js';
-import { useAgentStream } from './hooks/useAgentStream.js';
+import { useAgentStream, estimateContextPct } from './hooks/useAgentStream.js';
 
 export type { TurnEntry } from './replReducer.js';
 
@@ -23,9 +24,10 @@ interface ReplAppProps {
   seed: ReturnType<typeof import('@seedkit-ai/ai-sdk-provider').createSeed>;
   onExit: () => void;
   skipConfirm?: boolean;
+  initialSkills?: SkillEntry[];
 }
 
-const INITIAL_STATE = (initialConfig: Config): AppState => ({
+const INITIAL_STATE = (initialConfig: Config, initialSkills: SkillEntry[]): AppState => ({
   staticTurns: [],
   activeTurn: null,
   activeReasoning: null,
@@ -36,13 +38,14 @@ const INITIAL_STATE = (initialConfig: Config): AppState => ({
   liveConfig: initialConfig,
   totalTokens: 0,
   waitingForModel: false,
+  availableSkills: initialSkills,
   resumeSessions: null,
 });
 
-export function ReplApp({ config: initialConfig, version, seed, onExit, skipConfirm = false }: ReplAppProps) {
+export function ReplApp({ config: initialConfig, version, seed, onExit, skipConfirm = false, initialSkills = [] }: ReplAppProps) {
   const cwd = process.cwd();
 
-  const [state, dispatch] = useReducer(replReducer, initialConfig, INITIAL_STATE);
+  const [state, dispatch] = useReducer(replReducer, undefined, () => INITIAL_STATE(initialConfig, initialSkills));
 
   // Single ref that always reflects current state — used by stable callbacks
   const stateRef = useRef(state);
@@ -88,9 +91,10 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
       version,
       totalTokens,
       availableSkills: context.availableSkillsRef.current,
-      activeSkills: context.activeSkillsRef.current,
       sessionId: context.sessionIdRef.current,
       cwd,
+      systemPrompt: context.systemPromptRef.current,
+      messageHistoryChars: JSON.stringify(stream.messages.current).length,
     } satisfies SessionState);
 
     if (cmdResult.type === 'exit') { onExit(); return; }
@@ -128,18 +132,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
       dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: `✓ Thinking mode: ${!liveConfig.thinking ? 'on' : 'off'}` } });
       return;
     }
-    if (cmdResult.type === 'skill_activate') {
-      const skill = context.availableSkillsRef.current.find((s) => s.name === cmdResult.skillName);
-      if (!skill) {
-        dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: `✗ Skill not found: ${cmdResult.skillName}` } });
-      } else if (context.activeSkillsRef.current.some((s) => s.name === skill.name)) {
-        dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: `  Skill already active: ${skill.name}` } });
-      } else {
-        context.activeSkillsRef.current = [...context.activeSkillsRef.current, skill];
-        dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: `✓ Skill activated: ${skill.name}` } });
-      }
-      return;
-    }
+
     if (cmdResult.type === 'compact') {
       void stream.runCompact(liveConfig);
       return;
@@ -221,12 +214,14 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
   const {
     staticTurns, activeTurn, activeReasoning, streaming,
     activeToolCalls, pendingConfirm, pendingQuestion,
-    liveConfig, waitingForModel, resumeSessions,
+    liveConfig, waitingForModel, availableSkills, resumeSessions,
   } = state;
 
   const maskedKey = liveConfig.apiKey
     ? liveConfig.apiKey.slice(0, 6) + '...' + liveConfig.apiKey.slice(-4)
     : '✗';
+
+  const contextPct = estimateContextPct(context.systemPromptRef.current, stream.messages.current);
 
   const activeTurnEntry =
     activeTurn !== null ? ({ type: 'assistant', content: activeTurn, done: false } as const) : null;
@@ -237,7 +232,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
 
   return (
     <Box flexDirection="column">
-      <StatusBar version={version} model={liveConfig.model} maskedKey={maskedKey} />
+      <StatusBar version={version} model={liveConfig.model} maskedKey={maskedKey} contextPct={contextPct} />
 
       <MessageList
         staticTurns={staticTurns}
@@ -257,7 +252,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
         questionOptions={isWaitingForQuestion ? (pendingQuestion!.options ?? []) : undefined}
         waitingForModel={waitingForModel}
         currentModel={liveConfig.model}
-        availableSkills={context.availableSkillsRef.current}
+        availableSkills={availableSkills}
         resumeSessions={resumeSessions}
         cwd={cwd}
         onSubmit={handleSubmit}
