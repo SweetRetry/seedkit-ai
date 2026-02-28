@@ -21,6 +21,7 @@ export type SlashCommandResult =
   | { type: 'skill_activate'; skillName: string }
   | { type: 'compact' }
   | { type: 'resume'; sessionId: string }
+  | { type: 'resume_picker' }
   | { type: 'not_command' };
 
 /** `/skills:<name>` pattern */
@@ -86,7 +87,7 @@ export function handleSlashCommand(
 
     case 'resume': {
       const prefix = args[0];
-      if (!prefix) return { type: 'handled', output: 'Usage: /resume <session-id-prefix>' };
+      if (!prefix) return { type: 'resume_picker' };
       const fullId = resolveSessionId(state.cwd, prefix);
       if (!fullId) return { type: 'handled', output: `No session found matching: ${prefix}` };
       return { type: 'resume', sessionId: fullId };

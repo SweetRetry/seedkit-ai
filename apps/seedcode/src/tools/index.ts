@@ -7,8 +7,13 @@ import { globFiles } from './glob.js';
 import { grepFiles } from './grep.js';
 import { runBash } from './bash.js';
 import { webSearch, webFetch } from '@seedkit-ai/tools';
+import { captureScreenshot, getDisplayList } from './screenshot.js';
+import { createTodoStore } from './todo.js';
 
-export type ToolName = 'read' | 'edit' | 'write' | 'glob' | 'grep' | 'bash' | 'webSearch' | 'webFetch';
+export type ToolName = 'read' | 'edit' | 'write' | 'glob' | 'grep' | 'bash' | 'webSearch' | 'webFetch' | 'listDisplays' | 'screenshot' | 'todoWrite' | 'todoRead' | 'askQuestion';
+
+export { createTodoStore };
+export type { TodoStore, TodoItem } from './todo.js';
 
 export type PendingConfirm = {
   toolName: ToolName;
@@ -22,6 +27,22 @@ export type PendingConfirm = {
 // Callback so the agent loop can request confirmation from the UI
 export type ConfirmFn = (pending: PendingConfirm) => void;
 
+export type PendingQuestionOption = {
+  label: string;
+  description?: string;
+};
+
+export type PendingQuestion = {
+  question: string;
+  /** Optional recommended options the agent proposes — user can pick one or type freely */
+  options?: PendingQuestionOption[];
+  /** Resolve with the user's answer string */
+  resolve: (answer: string) => void;
+};
+
+// Callback so the agent loop can ask the user a free-text question
+export type AskQuestionFn = (pending: PendingQuestion) => void;
+
 /** Sentinel field present on all tool error responses. UI checks this to determine status. */
 export interface ToolError {
   error: string;
@@ -34,9 +55,11 @@ export function isToolError(output: unknown): output is ToolError {
 export function buildTools(opts: {
   cwd: string;
   confirm: ConfirmFn;
+  askQuestion: AskQuestionFn;
   skipConfirm: boolean;
+  todoStore: ReturnType<typeof createTodoStore>;
 }) {
-  const { cwd, confirm, skipConfirm } = opts;
+  const { cwd, confirm, askQuestion, skipConfirm, todoStore } = opts;
 
   const requestConfirm = (
     toolName: ToolName,
@@ -211,6 +234,78 @@ export function buildTools(opts: {
         }
       },
     }),
+
+    listDisplays: tool({
+      description:
+        'List all connected displays/monitors. ' +
+        'Call this BEFORE taking a screenshot whenever the user has not specified which display to capture. ' +
+        'If only one display is found, proceed directly with screenshot(displayId: 1). ' +
+        'If multiple displays are found, show the list to the user and ask which one to capture.',
+      inputSchema: z.object({}),
+      execute: async (): Promise<{ displays: Array<{ id: number; description: string; isMain: boolean }>; count: number } | ToolError> => {
+        try {
+          return await getDisplayList();
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    }),
+
+    screenshot: tool({
+      description:
+        'Capture a screenshot on macOS. The image is automatically compressed ' +
+        '(resized to max 1280px long-edge, converted to JPEG) to minimise token usage. ' +
+        'IMPORTANT: If the user has not specified a display, call listDisplays first. ' +
+        'If there is only one display, use displayId: 1. ' +
+        'If there are multiple displays, ask the user which display to capture before calling this tool. ' +
+        'Only supported on macOS; throws an error on other platforms.',
+      inputSchema: z.object({
+        displayId: z
+          .number()
+          .int()
+          .min(1)
+          .describe('1-based display index. 1 = main display, 2 = second display, etc.'),
+      }),
+      execute: async ({ displayId }): Promise<{ mediaId: string; mediaType: 'image/jpeg'; byteSize: number; rawByteSize: number; displayId: number } | ToolError> => {
+        try {
+          return await captureScreenshot(displayId);
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    }),
+
+    askQuestion: tool({
+      description:
+        'Ask the user a clarifying question before proceeding. Use when you are uncertain about ' +
+        'requirements, need the user to make a decision, or want to align on approach. ' +
+        'You can optionally provide recommended options — the user may pick one or type a custom answer. ' +
+        'Do NOT use this for simple yes/no confirmations (those use the built-in confirm flow).',
+      inputSchema: z.object({
+        question: z.string().describe('The question to ask the user'),
+        options: z
+          .array(
+            z.object({
+              label: z.string().describe('Short option label (the answer text)'),
+              description: z.string().optional().describe('Optional elaboration shown under the label'),
+            })
+          )
+          .optional()
+          .describe('Recommended answer options for the user to choose from (they can still type freely)'),
+      }),
+      execute: async ({ question, options }): Promise<{ answer: string } | ToolError> => {
+        return new Promise<{ answer: string } | ToolError>((resolve) => {
+          askQuestion({
+            question,
+            options,
+            resolve: (answer) => resolve({ answer }),
+          });
+        });
+      },
+    }),
+
+    todoWrite: todoStore.todoWrite,
+    todoRead: todoStore.todoRead,
   };
 }
 

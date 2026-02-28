@@ -1,0 +1,144 @@
+import type { Config } from '../config/schema.js';
+import type { PendingConfirm, PendingQuestion } from '../tools/index.js';
+import type { ToolCallEntry } from './ToolCallView.js';
+import type { SessionEntry } from '../sessions/index.js';
+
+export type TurnEntry =
+  | { type: 'user'; content: string }
+  | { type: 'assistant'; content: string; done: boolean; reasoning?: string }
+  | { type: 'error'; content: string }
+  | { type: 'info'; content: string }
+  | { type: 'toolcall'; entry: ToolCallEntry };
+
+export interface AppState {
+  staticTurns: TurnEntry[];
+  activeTurn: string | null;
+  activeReasoning: string | null;
+  streaming: boolean;
+  activeToolCalls: ToolCallEntry[];
+  pendingConfirm: PendingConfirm | null;
+  pendingQuestion: PendingQuestion | null;
+  liveConfig: Config;
+  totalTokens: number;
+  waitingForModel: boolean;
+  resumeSessions: SessionEntry[] | null;
+}
+
+export type Action =
+  | { type: 'PUSH_STATIC'; entry: TurnEntry }
+  | { type: 'SET_STATIC_TURNS'; turns: TurnEntry[] }
+  | { type: 'STREAM_START' }
+  | { type: 'STREAM_TICK'; text: string }
+  | { type: 'REASONING_TICK'; text: string }
+  | { type: 'STEP_FINISH' }
+  | { type: 'STREAM_END' }
+  | { type: 'STREAM_ERROR'; content: string }
+  | { type: 'FLUSH_TOOL_CALLS' }
+  | { type: 'CONFIRM_TOOL'; approved: boolean }
+  | { type: 'SET_PENDING_CONFIRM'; pending: PendingConfirm | null }
+  | { type: 'SET_PENDING_QUESTION'; pending: PendingQuestion | null }
+  | { type: 'SET_MODEL'; model: string }
+  | { type: 'TOGGLE_THINKING' }
+  | { type: 'ADD_TOKENS'; count: number }
+  | { type: 'SET_TOTAL_TOKENS'; count: number }
+  | { type: 'SET_WAITING_FOR_MODEL'; value: boolean }
+  | { type: 'SET_RESUME_SESSIONS'; sessions: SessionEntry[] | null }
+  | { type: 'CLEAR' };
+
+export function replReducer(state: AppState, action: Action): AppState {
+  switch (action.type) {
+    case 'PUSH_STATIC':
+      return { ...state, staticTurns: [...state.staticTurns, action.entry] };
+
+    case 'SET_STATIC_TURNS':
+      return { ...state, staticTurns: action.turns };
+
+    case 'STREAM_START':
+      return { ...state, streaming: true, activeTurn: '', activeToolCalls: [] };
+
+    case 'STREAM_TICK':
+      return { ...state, activeTurn: action.text };
+
+    case 'REASONING_TICK':
+      return { ...state, activeReasoning: action.text || null };
+
+    case 'STEP_FINISH':
+      return { ...state, activeTurn: '', activeReasoning: null, activeToolCalls: [] };
+
+    case 'STREAM_END':
+      return {
+        ...state,
+        streaming: false,
+        activeTurn: null,
+        activeReasoning: null,
+        activeToolCalls: [],
+        pendingConfirm: null,
+        pendingQuestion: null,
+      };
+
+    case 'STREAM_ERROR':
+      return {
+        ...state,
+        streaming: false,
+        activeTurn: null,
+        activeReasoning: null,
+        activeToolCalls: [],
+        pendingConfirm: null,
+        pendingQuestion: null,
+        staticTurns: [...state.staticTurns, { type: 'error', content: action.content }],
+      };
+
+    case 'FLUSH_TOOL_CALLS':
+      return { ...state, activeToolCalls: [] };
+
+    case 'CONFIRM_TOOL': {
+      const { approved } = action;
+      return {
+        ...state,
+        pendingConfirm: null,
+        activeToolCalls: state.activeToolCalls.map((tc) =>
+          tc.status === 'pending'
+            ? { ...tc, status: approved ? ('running' as const) : ('denied' as const) }
+            : tc
+        ),
+      };
+    }
+
+    case 'SET_PENDING_CONFIRM':
+      return { ...state, pendingConfirm: action.pending };
+
+    case 'SET_PENDING_QUESTION':
+      return { ...state, pendingQuestion: action.pending };
+
+    case 'SET_MODEL':
+      return { ...state, liveConfig: { ...state.liveConfig, model: action.model } };
+
+    case 'TOGGLE_THINKING':
+      return { ...state, liveConfig: { ...state.liveConfig, thinking: !state.liveConfig.thinking } };
+
+    case 'ADD_TOKENS':
+      return { ...state, totalTokens: state.totalTokens + action.count };
+
+    case 'SET_TOTAL_TOKENS':
+      return { ...state, totalTokens: action.count };
+
+    case 'SET_WAITING_FOR_MODEL':
+      return { ...state, waitingForModel: action.value };
+
+    case 'SET_RESUME_SESSIONS':
+      return { ...state, resumeSessions: action.sessions };
+
+    case 'CLEAR':
+      return {
+        ...state,
+        staticTurns: [],
+        activeTurn: null,
+        activeReasoning: null,
+        streaming: false,
+        activeToolCalls: [],
+        pendingConfirm: null,
+        pendingQuestion: null,
+        totalTokens: 0,
+      };
+  }
+}
