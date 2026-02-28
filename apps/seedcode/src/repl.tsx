@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { render } from 'ink';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createSeed } from '@seedkit-ai/ai-sdk-provider';
 import type { Config } from './config/schema.js';
 import { buildContext, type SkillEntry } from './context/index.js';
-import { ReplApp } from './ui/ReplApp.js';
+import { ReplApp, type SavedReplState } from './ui/ReplApp.js';
 import { SetupWizard } from './ui/SetupWizard.js';
 
 interface ReplOptions {
@@ -15,13 +18,17 @@ function App({
   version,
   skipConfirm,
   initialSkills,
+  savedState,
   onExit,
+  onOpenEditor,
 }: {
   config: Config;
   version: string;
   skipConfirm: boolean;
   initialSkills: SkillEntry[];
+  savedState?: SavedReplState;
   onExit: () => void;
+  onOpenEditor: (filePath: string, saved: SavedReplState) => void;
 }) {
   const [apiKey, setApiKey] = useState(config.apiKey ?? '');
 
@@ -43,8 +50,10 @@ function App({
       version={version}
       seed={seed}
       onExit={onExit}
+      onOpenEditor={onOpenEditor}
       skipConfirm={skipConfirm}
       initialSkills={initialSkills}
+      savedState={savedState}
     />
   );
 }
@@ -57,19 +66,49 @@ export async function startRepl(
   const cwd = process.cwd();
   const { skills: initialSkills } = buildContext(cwd);
 
-  await new Promise<void>((resolve) => {
-    const { unmount } = render(
-      <App
-        config={config}
-        version={version}
-        skipConfirm={opts.skipConfirm ?? false}
-        initialSkills={initialSkills}
-        onExit={() => {
-          unmount();
-          resolve();
-        }}
-      />,
-      { exitOnCtrlC: false }
-    );
-  });
+  type PendingEditor = { filePath: string; saved: SavedReplState } | null;
+  let pendingEditor: PendingEditor = null;
+
+  const mount = (savedState?: SavedReplState): Promise<void> =>
+    new Promise<void>((resolve) => {
+      const { unmount } = render(
+        <App
+          config={config}
+          version={version}
+          skipConfirm={opts.skipConfirm ?? false}
+          initialSkills={initialSkills}
+          savedState={savedState}
+          onExit={() => {
+            unmount();
+            resolve();
+          }}
+          onOpenEditor={(filePath, saved) => {
+            pendingEditor = { filePath, saved };
+            unmount();
+            resolve();
+          }}
+        />,
+        { exitOnCtrlC: false }
+      );
+    });
+
+  // Loop: re-mount after returning from editor
+  let restoreState: SavedReplState | undefined;
+  while (true) {
+    await mount(restoreState);
+
+    if (pendingEditor) {
+      const { filePath, saved } = pendingEditor;
+      pendingEditor = null;
+      restoreState = saved;
+      // Ensure memory file's parent dir exists before opening editor
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
+      spawnSync(editor, [filePath], { stdio: 'inherit' });
+      // Loop continues — re-mount the REPL with restored state
+    } else {
+      // Normal exit
+      break;
+    }
+  }
 }

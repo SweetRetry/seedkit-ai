@@ -1,5 +1,6 @@
 import type { Config } from '../config/schema.js';
 import type { PendingConfirm, PendingQuestion } from '../tools/index.js';
+import type { TodoItem } from '../tools/todo.js';
 import type { ToolCallEntry } from './ToolCallView.js';
 import type { SessionEntry } from '../sessions/index.js';
 import type { SkillEntry } from '../context/index.js';
@@ -17,6 +18,7 @@ export interface AppState {
   activeReasoning: string | null;
   streaming: boolean;
   activeToolCalls: ToolCallEntry[];
+  activeTodos: TodoItem[];
   pendingConfirm: PendingConfirm | null;
   pendingQuestion: PendingQuestion | null;
   liveConfig: Config;
@@ -24,6 +26,7 @@ export interface AppState {
   waitingForModel: boolean;
   availableSkills: SkillEntry[];
   resumeSessions: SessionEntry[] | null;
+  memoryPicker: boolean;
 }
 
 export type Action =
@@ -39,6 +42,7 @@ export type Action =
   | { type: 'CONFIRM_TOOL'; approved: boolean }
   | { type: 'SET_PENDING_CONFIRM'; pending: PendingConfirm | null }
   | { type: 'SET_PENDING_QUESTION'; pending: PendingQuestion | null }
+  | { type: 'SET_ACTIVE_TODOS'; todos: TodoItem[] }
   | { type: 'SET_MODEL'; model: string }
   | { type: 'TOGGLE_THINKING' }
   | { type: 'ADD_TOKENS'; count: number }
@@ -46,6 +50,7 @@ export type Action =
   | { type: 'SET_WAITING_FOR_MODEL'; value: boolean }
   | { type: 'SET_AVAILABLE_SKILLS'; skills: SkillEntry[] }
   | { type: 'SET_RESUME_SESSIONS'; sessions: SessionEntry[] | null }
+  | { type: 'SET_MEMORY_PICKER'; value: boolean }
   | { type: 'CLEAR' };
 
 export function replReducer(state: AppState, action: Action): AppState {
@@ -57,7 +62,7 @@ export function replReducer(state: AppState, action: Action): AppState {
       return { ...state, staticTurns: action.turns };
 
     case 'STREAM_START':
-      return { ...state, streaming: true, activeTurn: '', activeToolCalls: [] };
+      return { ...state, streaming: true, activeTurn: '', activeToolCalls: [], activeTodos: [] };
 
     case 'STREAM_TICK':
       return { ...state, activeTurn: action.text };
@@ -75,6 +80,7 @@ export function replReducer(state: AppState, action: Action): AppState {
         activeTurn: null,
         activeReasoning: null,
         activeToolCalls: [],
+        activeTodos: [],
         pendingConfirm: null,
         pendingQuestion: null,
       };
@@ -86,6 +92,7 @@ export function replReducer(state: AppState, action: Action): AppState {
         activeTurn: null,
         activeReasoning: null,
         activeToolCalls: [],
+        activeTodos: [],
         pendingConfirm: null,
         pendingQuestion: null,
         staticTurns: [...state.staticTurns, { type: 'error', content: action.content }],
@@ -113,6 +120,9 @@ export function replReducer(state: AppState, action: Action): AppState {
     case 'SET_PENDING_QUESTION':
       return { ...state, pendingQuestion: action.pending };
 
+    case 'SET_ACTIVE_TODOS':
+      return { ...state, activeTodos: action.todos };
+
     case 'SET_MODEL':
       return { ...state, liveConfig: { ...state.liveConfig, model: action.model } };
 
@@ -134,6 +144,9 @@ export function replReducer(state: AppState, action: Action): AppState {
     case 'SET_RESUME_SESSIONS':
       return { ...state, resumeSessions: action.sessions };
 
+    case 'SET_MEMORY_PICKER':
+      return { ...state, memoryPicker: action.value };
+
     case 'CLEAR':
       return {
         ...state,
@@ -142,6 +155,7 @@ export function replReducer(state: AppState, action: Action): AppState {
         activeReasoning: null,
         streaming: false,
         activeToolCalls: [],
+        activeTodos: [],
         pendingConfirm: null,
         pendingQuestion: null,
         totalTokens: 0,

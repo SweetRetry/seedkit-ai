@@ -1,5 +1,5 @@
 import { Readability } from '@mozilla/readability';
-import { JSDOM } from 'jsdom';
+import { JSDOM, VirtualConsole } from 'jsdom';
 import TurndownService from 'turndown';
 
 const MAX_MARKDOWN_CHARS = 20_000;
@@ -38,7 +38,7 @@ export interface ExtractResult {
  *   2. Remove HR noise lines (* * *)
  *   3. Collapse 3+ consecutive blank lines → 2
  */
-function compressMarkdown(md: string): string {
+export function compressMarkdown(md: string): string {
   // Protect code blocks and inline code from substitution by replacing them
   // with stable placeholders, then restoring after all transforms complete.
   const protected_: string[] = [];
@@ -76,8 +76,13 @@ function compressMarkdown(md: string): string {
  * Pure function: parse an HTML string and convert the main article content to
  * Markdown. Does not perform any network I/O — safe to call in unit tests.
  */
+// Silence jsdom CSS parse errors — malformed stylesheets on third-party pages
+// produce noisy stack traces that are irrelevant to content extraction.
+const silentConsole = new VirtualConsole();
+silentConsole.sendTo(console, { omitJSDOMErrors: true });
+
 export function extractContent(html: string, url: string): ExtractResult {
-  const dom = new JSDOM(html, { url });
+  const dom = new JSDOM(html, { url, virtualConsole: silentConsole });
   const document = dom.window.document;
 
   const reader = new Readability(document);
@@ -87,10 +92,10 @@ export function extractContent(html: string, url: string): ExtractResult {
   let title: string;
 
   if (article) {
-    title = article.title ?? url;
+    title = article.title || url;
     markdown = turndown.turndown(article.content ?? '');
   } else {
-    title = document.title ?? url;
+    title = document.title || url;
     const body = document.body?.innerHTML ?? html;
     markdown = turndown.turndown(body);
   }

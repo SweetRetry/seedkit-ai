@@ -83,6 +83,18 @@ export function ToolCallLine({ entry, onConfirm }: ToolCallLineProps) {
           <Text color="red" dimColor>{entry.output}</Text>
         </Box>
       )}
+
+      {entry.status === 'done' && entry.output && (() => {
+        const lines = entry.output.trim().split('\n');
+        const preview = lines.slice(0, 5).join('\n');
+        const truncated = lines.length > 5;
+        return (
+          <Box marginLeft={2} flexDirection="column">
+            <Text dimColor>{preview}</Text>
+            {truncated && <Text dimColor>… {lines.length - 5} more lines</Text>}
+          </Box>
+        );
+      })()}
     </Box>
   );
 }

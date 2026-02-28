@@ -1,30 +1,45 @@
 import React, { memo } from 'react';
 import { Box, Text } from 'ink';
 import type { PendingConfirm } from '../tools/index.js';
+import { computeDiffStats } from '../tools/diffStats.js';
 
 interface ConfirmPromptProps {
   pending: PendingConfirm | null;
 }
 
-const DIFF_LINES_MAX = 12;
-
 export const ConfirmPrompt = memo(function ConfirmPrompt({ pending }: ConfirmPromptProps) {
   if (!pending) return null;
 
-  const hasDiff = pending.diffLines && (
-    pending.diffLines.removed.length > 0 || pending.diffLines.added.length > 0
-  );
+  const { diffHunk } = pending;
+  const hasDiff = diffHunk && diffHunk.length > 0;
+
+  const stats = hasDiff ? computeDiffStats(diffHunk!) : null;
+
+  // Compute line number column width for alignment
+  const maxLineNo = hasDiff
+    ? Math.max(...diffHunk!.filter((l) => l.lineNo !== undefined).map((l) => l.lineNo!), 1)
+    : 1;
+  const lineNoWidth = String(maxLineNo).length;
 
   return (
     <Box flexDirection="column" marginTop={1} paddingX={1}>
-      {/* Header bar */}
+      {/* Header */}
       <Box gap={2}>
         <Text color="yellow" bold>{pending.toolName}</Text>
         <Text dimColor>{pending.description}</Text>
       </Box>
 
-      {/* Diff block */}
-      {hasDiff && pending.diffLines && (
+      {/* Diff stats summary */}
+      {stats && (stats.added > 0 || stats.removed > 0) && (
+        <Box marginTop={1} gap={1}>
+          {stats.added > 0 && <Text color="green">+{stats.added}</Text>}
+          {stats.removed > 0 && <Text color="red">-{stats.removed}</Text>}
+          <Text dimColor>lines</Text>
+        </Box>
+      )}
+
+      {/* Unified diff block */}
+      {hasDiff && (
         <Box
           flexDirection="column"
           borderStyle="single"
@@ -32,32 +47,46 @@ export const ConfirmPrompt = memo(function ConfirmPrompt({ pending }: ConfirmPro
           marginTop={1}
           paddingX={1}
         >
-          {/* removed lines */}
-          {pending.diffLines.removed.slice(0, DIFF_LINES_MAX).map((line, i) => (
-            <Box key={`r${i}`} gap={1}>
-              <Text color="red">-</Text>
-              <Text color="red" dimColor>{line}</Text>
-            </Box>
-          ))}
-          {pending.diffLines.removed.length > DIFF_LINES_MAX && (
-            <Text dimColor>{`… ${pending.diffLines.removed.length - DIFF_LINES_MAX} more removed`}</Text>
-          )}
+          {diffHunk!.map((line, i) => {
+            if (line.kind === 'context' && line.text === '⋮') {
+              return (
+                <Box key={i}>
+                  <Text dimColor>{'⋮'}</Text>
+                </Box>
+              );
+            }
 
-          {/* separator when both sides present */}
-          {pending.diffLines.removed.length > 0 && pending.diffLines.added.length > 0 && (
-            <Text dimColor>──</Text>
-          )}
+            const lineNoStr = line.lineNo !== undefined
+              ? String(line.lineNo).padStart(lineNoWidth)
+              : ' '.repeat(lineNoWidth);
 
-          {/* added lines */}
-          {pending.diffLines.added.slice(0, DIFF_LINES_MAX).map((line, i) => (
-            <Box key={`a${i}`} gap={1}>
-              <Text color="green">+</Text>
-              <Text color="green" dimColor>{line}</Text>
-            </Box>
-          ))}
-          {pending.diffLines.added.length > DIFF_LINES_MAX && (
-            <Text dimColor>{`… ${pending.diffLines.added.length - DIFF_LINES_MAX} more added`}</Text>
-          )}
+            if (line.kind === 'removed') {
+              return (
+                <Box key={i} gap={1}>
+                  <Text dimColor>{lineNoStr}</Text>
+                  <Text color="red" bold>{'-'}</Text>
+                  <Text color="red">{line.text}</Text>
+                </Box>
+              );
+            }
+            if (line.kind === 'added') {
+              return (
+                <Box key={i} gap={1}>
+                  <Text dimColor>{' '.repeat(lineNoWidth)}</Text>
+                  <Text color="green" bold>{'+'}</Text>
+                  <Text color="green">{line.text}</Text>
+                </Box>
+              );
+            }
+            // context
+            return (
+              <Box key={i} gap={1}>
+                <Text dimColor>{lineNoStr}</Text>
+                <Text dimColor>{' '}</Text>
+                <Text dimColor>{line.text}</Text>
+              </Box>
+            );
+          })}
         </Box>
       )}
 

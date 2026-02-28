@@ -12,6 +12,7 @@ export interface AgentContext {
   systemPromptRef: React.MutableRefObject<string>;
   availableSkillsRef: React.MutableRefObject<SkillEntry[]>;
   sessionIdRef: React.MutableRefObject<string>;
+  memoryFilePathRef: React.MutableRefObject<string>;
   getEffectiveSystemPrompt: () => string;
   loadContext: () => void;
 }
@@ -20,11 +21,13 @@ export function useAgentContext({ cwd, dispatch }: UseAgentContextOptions): Agen
   const systemPromptRef = useRef<string>('');
   const availableSkillsRef = useRef<SkillEntry[]>([]);
   const sessionIdRef = useRef<string>(createSession(cwd));
+  const memoryFilePathRef = useRef<string>('');
 
   const loadContext = useCallback(() => {
     const result = buildContext(cwd);
     systemPromptRef.current = result.systemPrompt;
     availableSkillsRef.current = result.skills;
+    memoryFilePathRef.current = result.memoryFilePath;
     dispatch({ type: 'SET_AVAILABLE_SKILLS', skills: result.skills });
     for (const warning of result.warnings) {
       dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: `⚠  ${warning}` } });
@@ -35,5 +38,5 @@ export function useAgentContext({ cwd, dispatch }: UseAgentContextOptions): Agen
 
   const getEffectiveSystemPrompt = useCallback((): string => systemPromptRef.current, []);
 
-  return { systemPromptRef, availableSkillsRef, sessionIdRef, getEffectiveSystemPrompt, loadContext };
+  return { systemPromptRef, availableSkillsRef, sessionIdRef, memoryFilePathRef, getEffectiveSystemPrompt, loadContext };
 }

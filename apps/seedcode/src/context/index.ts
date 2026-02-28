@@ -1,5 +1,6 @@
 import { loadAgentsMd } from './agents-md.js';
 import { discoverSkills, loadSkillBody, type SkillEntry } from './skills.js';
+import { loadMemory } from './memory.js';
 
 const BASE_SYSTEM_PROMPT = `<persona>
 You are seedcode — a precise, terminal-native AI coding assistant powered by ByteDance Seed 2.0.
@@ -20,6 +21,7 @@ Tool inventory (grouped by purpose):
   Screen:        listDisplays (enumerate monitors), screenshot (capture a display)
   Task tracking: todoRead (read task list), todoWrite (write task list)
   Interaction:   askQuestion (ask user a clarifying question), loadSkill (load a skill's full instructions)
+  Sub-agents:    spawnAgent (spawn an isolated agent for independent parallel subtasks)
 </context>
 
 <task>
@@ -31,7 +33,7 @@ For code changes — follow this decision order:
 1. Read the target file first — never modify blind
 2. Use edit for existing files (surgical patch, fewer tokens, exactly-once match required)
 3. Use write only for new files or when a full rewrite is clearly needed
-4. Use bash for build, test, lint, or shell operations
+4. Use bash for build, test, lint, git, or other shell operations
 
 For exploration — prefer parallel tool calls:
 - Use glob to locate files by name/pattern
@@ -47,9 +49,17 @@ For screen capture:
 - If only one display exists, proceed with screenshot(displayId: 1) directly
 - If multiple displays exist, show the list and ask which one before capturing
 
-For multi-step tasks (3+ distinct actions):
-- Use todoWrite to record the task list at the start
-- Update todo status as steps complete
+For task tracking — ALWAYS use todoWrite before starting any non-trivial work:
+- Create the full task list FIRST, before any file reads or edits (status: pending)
+- Mark a task in_progress immediately before working on it
+- Mark completed immediately after finishing each task
+- "Non-trivial" means anything with 2+ steps, any file modification, or any multi-file change
+- Single-line clarifications or pure read-only answers do NOT need a todo list
+
+For parallel independent subtasks:
+- Use spawnAgent when two or more subtasks are fully independent (e.g., research two separate topics, search two unrelated codebases)
+- Each spawnAgent call runs in isolation — no shared state, no file edits
+- Multiple spawnAgent calls in one response execute in parallel automatically
 
 For clarification:
 - Use askQuestion when requirements are ambiguous or a decision point blocks progress
@@ -58,6 +68,12 @@ For clarification:
 For skills:
 - When the user invokes a skill (e.g. /color-palette), call loadSkill with the skill name first
 - Apply the skill's full instructions before proceeding
+
+For project memory:
+- A persistent memory file may be injected below as "## Project Memory"
+- When the user explicitly says "记住" / "remember this" / "save to memory", write the fact to the memory file using the edit or write tool
+- Memory file path: ~/.seedcode/projects/{cwd-slug}/memory/MEMORY.md (cwd-slug = CWD with / replaced by -)
+- Only write to memory when the user explicitly asks — do NOT proactively update it on your own judgement
 
 ## Safety
 
@@ -93,11 +109,12 @@ export interface ContextResult {
   systemPrompt: string;
   warnings: string[];
   skills: SkillEntry[];
+  memoryFilePath: string;
 }
 
 /**
  * Assemble the full system prompt from all sources.
- * Priority (low → high): base prompt → global AGENTS.md → project AGENTS.md → skills descriptions
+ * Priority (low → high): base prompt → global AGENTS.md → project AGENTS.md → memory → skills descriptions
  */
 export function buildContext(cwd: string): ContextResult {
   const warnings: string[] = [];
@@ -112,6 +129,11 @@ export function buildContext(cwd: string): ContextResult {
 
   if (agentsResult.projectContent) {
     sections.push('## Project Instructions (AGENTS.md)\n\n' + agentsResult.projectContent);
+  }
+
+  const memoryResult = loadMemory(cwd);
+  if (memoryResult.content) {
+    sections.push(`## Project Memory\n\n${memoryResult.content}`);
   }
 
   const skillsResult = discoverSkills(cwd);
@@ -140,6 +162,7 @@ export function buildContext(cwd: string): ContextResult {
     systemPrompt,
     warnings,
     skills: skillsResult.skills,
+    memoryFilePath: memoryResult.filePath,
   };
 }
 

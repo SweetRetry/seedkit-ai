@@ -1,6 +1,6 @@
 # seedcode — Development Plan
 
-> **Updated**: 2026-02-28
+> **Updated**: 2026-02-28 (Gap analysis added 2026-02-28)
 > **Goal**: Functional parity with Claude Code's core coding loop, constrained only by model quality.
 > Each phase is a fully usable milestone. Later phases build on earlier ones without breaking them.
 
@@ -146,6 +146,132 @@
 
 ---
 
+## Phase 5 — Output Quality ✅
+
+**Goal**: Make model output actually readable. Code blocks should look like code.
+
+**Deliverable**: Syntax-highlighted code blocks, Markdown formatting, colored diffs.
+
+### Tasks
+
+#### Markdown Rendering
+- [x] `ui/renderMarkdown.ts` — `marked` + `marked-terminal` render Markdown to ANSI (already existed)
+- [x] Wire `renderMarkdown` into `MessageList.tsx` for completed assistant turns (`turn.done ? renderMarkdown(turn.content) : turn.content`)
+- [x] Streaming turns stay plain text (content is incomplete mid-stream)
+
+#### Diff Display
+- [x] `ConfirmPrompt.tsx` — unified diff with green `+` / red `-` coloring, line numbers (already existed)
+- [x] `tools/diffStats.ts` — `computeDiffStats(hunk)` returns `{ added, removed }` count
+- [x] Wire diff stats into `ConfirmPrompt.tsx`: shows `+N -M lines` summary above diff block
+
+#### Bash Output
+- [x] `tools/bash.ts` — `truncateBashOutput(output)`: keeps first 100 + last 50 lines, injects `... N lines truncated ...` marker
+- [x] Wire truncation into `tools/index.ts` bash execute — model never receives >150 lines raw
+- [x] `ui/ToolCallView.tsx` — show bash stdout/stderr preview (up to 5 lines) in `done` state
+
+### Key decisions
+- Markdown already handled by `marked-terminal`; no custom parser needed
+- Bash preview in ToolCallView is display-only; model context uses full truncated output
+
+---
+
+## Phase 6 — Reliability & Safety
+
+**Goal**: Graceful error recovery, retry logic, undo capability.
+
+**Deliverable**: Network retries, tool-level undo, permission tiers.
+
+### Tasks
+
+#### Error Recovery
+- [ ] `utils/retry.ts` — exponential backoff retry wrapper (3 attempts, 1s/2s/4s, jitter); used by `useAgentStream` on 429/503
+- [ ] Distinguish error types in `useAgentStream`: network error (retry) vs API error (show + stop) vs tool error (continue loop)
+- [ ] Show error details in `MessageList`: red error badge + message; allow user to retry with same input via `r` key
+
+#### File Undo / Rollback
+- [ ] `tools/write.ts` + `tools/edit.ts` — before writing, save original content to `~/.seedcode/undo/{sessionId}/{timestamp}-{slug}.bak`
+- [ ] `/undo` slash command — list last N file changes in session; confirm restore
+- [ ] Undo store: in-memory ring buffer (last 20 file changes); cleared on `/clear`
+
+#### Permission Tiers
+- [ ] `--read-only` CLI flag — disable write/edit/bash tools; useful for exploratory sessions
+- [ ] `--no-bash` CLI flag — disable bash only (allow file edits)
+- [ ] Permission level shown in `/status` and StatusBar
+- [ ] `dangerouslySkipPermissions` already exists — document in `/help`
+
+### Key decisions
+- Bak files are soft-deleted on session end (user can opt to keep with `--keep-undo`)
+- Permission flags are session-scoped, not persisted to config
+
+---
+
+## Phase 7 — Agent Power Features
+
+**Goal**: Match Claude Code's advanced agentic capabilities.
+
+**Deliverable**: Parallel agents with UI, auto memory writes, file watching.
+
+### Tasks
+
+#### Parallel Agent Visibility
+- [ ] `ui/AgentProgressView.tsx` — show N concurrent spawnAgent tasks with status (running/done/error), spinner per agent, truncated description
+- [ ] `tools/spawn-agent.ts` — emit progress events back to parent via callback; `AgentProgressView` subscribes
+- [ ] Wire into `ReplApp.tsx` below `ActiveToolCallsView`
+
+#### Auto Memory Writes
+- [ ] `tools/memory.ts` — `memoryWrite` tool: appends/updates a section in `~/.seedcode/projects/{cwd-slug}/memory/MEMORY.md`; model calls this proactively
+- [ ] Register `memoryWrite` in `tools/index.ts` (no confirmation needed — low blast radius)
+- [ ] System prompt instruction: "call memoryWrite when you learn stable project facts (conventions, architecture decisions, env vars)"
+- [ ] `memoryRead` tool (alias for reading the memory file) for agent to check current memory
+
+#### Smart Context Compaction
+- [ ] Auto-compact trigger at 85% context usage (already fires, but uses naive summary)
+- [ ] `context/compact.ts` — structured compaction: separate tool call history from conversation text; compress tool results first; keep last 3 full turns verbatim
+- [ ] `/compact --aggressive` flag — max compression (drops all tool results)
+
+#### Interrupt & Resume Mid-Task
+- [ ] Ctrl+C during streaming → ask "interrupt task? [y/n]" before killing stream (currently kills immediately)
+- [ ] On interrupt: save partial messages to session file with `interrupted: true` marker
+- [ ] `/resume` detects interrupted session and shows warning
+
+### Key decisions
+- `memoryWrite` is a first-class tool (not a slash command) so the model can call it autonomously
+- Parallel agent progress is display-only; actual execution already works
+
+---
+
+## Phase 8 — Developer Experience
+
+**Goal**: Make seedcode easy to install, configure, extend, and debug.
+
+**Deliverable**: One-command install, diagnostic mode, skills authoring guide.
+
+### Tasks
+
+#### Distribution
+- [ ] `README.md` — hero section, `npx seedcode` quickstart, AGENTS.md example, skill authoring guide
+- [ ] npm publish: `publishConfig.access=public`, `files: ["dist"]`, `bin.seedcode`
+- [ ] `turbo.json` — add `seedcode#build` and `seedcode#typecheck` tasks
+- [ ] GitHub Actions: `ci.yml` — typecheck + build on PR; publish on tag `seedcode@*`
+- [ ] `npx seedcode --version` works from clean environment
+
+#### Diagnostics & Debugging
+- [ ] `--debug` CLI flag — log raw API requests/responses to `~/.seedcode/debug/{date}.log`
+- [ ] `/debug` slash command — show last API call timing, token breakdown, model used
+- [ ] `--dry-run` flag — run agent loop but skip write/edit/bash execution (show what would happen)
+- [ ] Cleaner startup error messages: missing API key → friendly wizard prompt, not raw error
+
+#### Skills Authoring
+- [ ] `seedcode init skill <name>` subcommand — scaffold `.seedcode/skills/<name>.md` with frontmatter template
+- [ ] Validate skill YAML on load; show friendly error if malformed (currently silently skipped)
+- [ ] `/skills validate` — check all discovered skills for frontmatter correctness
+
+### Key decisions
+- Debug log is append-only, truncated at 50MB
+- `--dry-run` still shows diffs and tool descriptions, just skips execution
+
+---
+
 ## Dependency Map
 
 ```
@@ -153,28 +279,49 @@ Phase 1 (config + REPL)
     ↓
 Phase 2 (tools + agent loop)
     ↓
-Phase 3a (edit tool + context)   ← closes biggest Claude Code gaps
+Phase 3a (edit tool + context)      ← closes biggest Claude Code gaps
     ↓
-Phase 3b (UX parity)             ← everyday interaction quality
+Phase 3b (UX parity)                ← everyday interaction quality
     ↓
-Phase 3c (session management)    ← persist + resume conversations
+Phase 3c (session management)       ← persist + resume conversations
     ↓
-Phase 4 (polish + publish)
+Phase 4 (polish + publish)          ← distributable package
+    ↓
+Phase 5 (output quality)            ← readable, highlighted output
+    ↓
+Phase 6 (reliability & safety)      ← retries, undo, permissions
+    ↓
+Phase 7 (agent power features)      ← parallel agents, auto memory
+    ↓
+Phase 8 (developer experience)      ← distribution, debug, skills DX
 ```
 
 ## Gap Tracker (vs Claude Code)
 
 | Gap | Closes in |
 |-----|-----------|
-| Edit tool (patch vs full overwrite) | Phase 3a |
-| System prompt + identity | Phase 3a |
-| AGENTS.md / project context | Phase 3a |
-| Skills system | Phase 3a |
-| Command history (↑↓) | Phase 3b |
-| Multiline input | Phase 3b |
-| Token usage visibility | Phase 3b |
-| `/compact` context compaction | Phase 3b |
-| Large file truncation warning | Phase 3b |
-| Session persistence (auto-save) | Phase 3c |
-| Session list + resume | Phase 3c |
+| Edit tool (patch vs full overwrite) | Phase 3a ✅ |
+| System prompt + identity | Phase 3a ✅ |
+| AGENTS.md / project context | Phase 3a ✅ |
+| Skills system | Phase 3a ✅ |
+| Command history (↑↓) | Phase 3b ✅ |
+| Multiline input | Phase 3b ✅ |
+| Token usage visibility | Phase 3b ✅ |
+| `/compact` context compaction | Phase 3b ✅ |
+| Large file truncation warning | Phase 3b ✅ |
+| Session persistence (auto-save) | Phase 3c ✅ |
+| Session list + resume | Phase 3c ✅ |
+| Markdown / syntax highlight rendering | Phase 5 |
+| Colored unified diff display | Phase 5 |
+| Bash output streaming + auto-truncation | Phase 5 |
+| Network retry / error recovery | Phase 6 |
+| File undo / rollback | Phase 6 |
+| Permission tiers (--read-only, --no-bash) | Phase 6 |
+| Parallel agent progress UI | Phase 7 |
+| Auto memory writes (model-driven) | Phase 7 |
+| Smart structured compaction | Phase 7 |
+| Interrupt & resume mid-task | Phase 7 |
+| npm publish / `npx seedcode` | Phase 8 |
+| Debug mode + dry-run | Phase 8 |
+| Skills authoring CLI | Phase 8 |
 | Model quality | Out of scope (provider constraint) |

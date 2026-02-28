@@ -1,5 +1,4 @@
 import { execSync } from 'node:child_process';
-import path from 'node:path';
 
 const DENYLIST_PATTERNS = [
   /rm\s+-rf\s+\/(?:\s|$)/,
@@ -13,6 +12,27 @@ const DENYLIST_PATTERNS = [
   /dd\s+if=.+of=\/dev\//,
 ];
 
+const TRUNCATE_HEAD = 100;
+const TRUNCATE_TAIL = 50;
+
+/**
+ * Truncate bash output to keep first 100 + last 50 lines.
+ * Injects a marker showing how many lines were dropped.
+ */
+export function truncateBashOutput(output: string): string {
+  if (!output) return output;
+  const lines = output.split('\n');
+  const total = lines.length;
+  if (total <= TRUNCATE_HEAD + TRUNCATE_TAIL) return output;
+
+  const dropped = total - TRUNCATE_HEAD - TRUNCATE_TAIL;
+  return [
+    ...lines.slice(0, TRUNCATE_HEAD),
+    `... ${dropped} lines truncated ...`,
+    ...lines.slice(total - TRUNCATE_TAIL),
+  ].join('\n');
+}
+
 export interface BashResult {
   stdout: string;
   stderr: string;
@@ -22,25 +42,10 @@ export interface BashResult {
 export function runBash(command: string, cwd?: string): BashResult {
   const baseCwd = cwd ?? process.cwd();
 
-  // Layer 1: denylist check
+  // Denylist check — catastrophic-only patterns
   for (const pattern of DENYLIST_PATTERNS) {
     if (pattern.test(command)) {
       throw new Error(`Command blocked by security policy: ${command}`);
-    }
-  }
-
-  // Layer 2: CWD boundary — detect attempts to escape startup CWD
-  // We allow cd within the subtree but flag escapes
-  const cdPattern = /cd\s+([^\s;&|]+)/g;
-  let match;
-  while ((match = cdPattern.exec(command)) !== null) {
-    const targetDir = match[1];
-    // Resolve against baseCwd to catch relative escapes
-    const resolved = path.resolve(baseCwd, targetDir);
-    if (!resolved.startsWith(baseCwd)) {
-      throw new Error(
-        `Directory escape blocked: cd to '${targetDir}' would leave the working directory.`
-      );
     }
   }
 

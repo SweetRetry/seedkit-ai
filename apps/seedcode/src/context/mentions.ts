@@ -1,23 +1,34 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
+
+export interface InjectedFile {
+  path: string;
+  content: string;
+  lineCount: number;
+}
+
 export interface MentionResult {
-  /** Original text with successfully resolved @mentions replaced by [filename] */
+  /** Original text with successfully resolved @mentions replaced by [filename] or image hint */
   cleanText: string;
-  /** Files that were successfully read */
-  injected: Array<{ path: string; content: string; lineCount: number }>;
+  /** Text files that were successfully read */
+  injected: InjectedFile[];
 }
 
 /**
- * Parse @path tokens from text, attempt to read each file, and return:
+ * Parse @path tokens from text, resolve files, and return:
  * - `cleanText`: text with resolved mentions replaced by `[filename]`
- * - `injected`: list of successfully read files with their content
+ * - `injected`: text files with their content
  *
- * Mentions that cannot be resolved (file not found / not a file) are left as-is in cleanText.
+ * Image files are NOT pre-loaded — a hint is embedded in cleanText so the
+ * agent can call the `read` tool on demand (which routes through MediaStore,
+ * same as the screenshot flow).
+ *
+ * Mentions that cannot be resolved are left as-is in cleanText.
  */
 export function resolveMentions(text: string, cwd: string): MentionResult {
-  const injected: MentionResult['injected'] = [];
-  // Track paths already injected to avoid duplicates
+  const injected: InjectedFile[] = [];
   const seen = new Set<string>();
 
   const cleanText = text.replace(/@([\S]+)/g, (match, rawPath: string) => {
@@ -25,23 +36,26 @@ export function resolveMentions(text: string, cwd: string): MentionResult {
       ? rawPath
       : path.join(cwd, rawPath);
 
-    if (seen.has(abs)) {
-      // Already injected — just strip the @mention
-      return `[${path.basename(abs)}]`;
-    }
+    if (seen.has(abs)) return `[${path.basename(abs)}]`;
 
     try {
       if (!fs.existsSync(abs)) return match;
       const stat = fs.statSync(abs);
       if (!stat.isFile()) return match;
 
+      seen.add(abs);
+      const ext = path.extname(abs).toLowerCase();
+
+      if (IMAGE_EXTENSIONS.has(ext)) {
+        // Image: embed a path hint — agent loads via read tool → MediaStore → auto-injected next turn
+        return `[image: ${abs} — use read("${abs}") to view it]`;
+      }
+
       const content = fs.readFileSync(abs, 'utf-8');
       const lineCount = content.split('\n').length;
       injected.push({ path: abs, content, lineCount });
-      seen.add(abs);
       return `[${path.basename(abs)}]`;
     } catch {
-      // Unreadable — leave original mention untouched
       return match;
     }
   });

@@ -1,36 +1,60 @@
 import { describe, test, expect, vi, afterEach } from 'vitest';
 import { webSearch } from './web-search.js';
 
-// Mock duck-duck-scrape at the module level
-vi.mock('duck-duck-scrape', () => ({
-  SafeSearchType: { OFF: -2 },
-  search: vi.fn(),
-}));
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-import { search } from 'duck-duck-scrape';
-const mockSearch = vi.mocked(search);
+function makeExaBlock(items: Array<{ title: string; url: string; text?: string }>) {
+  return items
+    .map(
+      ({ title, url, text = 'Some description text.' }) =>
+        `Title: ${title}\nURL: ${url}\nText: ${text}`,
+    )
+    .join('\n\n');
+}
 
-const FAKE_RESULTS = [
-  { title: 'Result One', url: 'https://example.com/1', description: 'First result' },
-  { title: 'Result Two', url: 'https://example.com/2', description: 'Second result' },
-  { title: 'Result Three', url: 'https://example.com/3', description: 'Third result' },
-  { title: 'Result Four', url: 'https://example.com/4', description: 'Fourth result' },
-  { title: 'Result Five', url: 'https://example.com/5', description: 'Fifth result' },
-  { title: 'Result Six', url: 'https://example.com/6', description: 'Sixth result' },
-];
+function makeExaSseResponse(body: string) {
+  const payload = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    result: { content: [{ type: 'text', text: body }] },
+  });
+  return `event: message\ndata: ${payload}\n`;
+}
+
+function mockFetch(sseText: string, status = 200) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status === 200 ? 'OK' : 'Error',
+      text: async () => sseText,
+    }),
+  );
+}
 
 afterEach(() => {
-  vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
-describe('webSearch', () => {
-  test('returns query and results with correct shape', async () => {
-    mockSearch.mockResolvedValue({ results: FAKE_RESULTS.slice(0, 3) } as never);
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('webSearch (Exa MCP)', () => {
+  test('returns query and correctly shaped results', async () => {
+    mockFetch(
+      makeExaSseResponse(
+        makeExaBlock([{ title: 'Result One', url: 'https://example.com/1', text: 'First result' }]),
+      ),
+    );
 
     const output = await webSearch('typescript tutorial');
 
     expect(output.query).toBe('typescript tutorial');
-    expect(output.results).toHaveLength(3);
+    expect(output.results).toHaveLength(1);
     expect(output.results[0]).toEqual({
       title: 'Result One',
       url: 'https://example.com/1',
@@ -38,51 +62,67 @@ describe('webSearch', () => {
     });
   });
 
-  test('respects limit parameter — returns at most limit results', async () => {
-    mockSearch.mockResolvedValue({ results: FAKE_RESULTS } as never);
+  test('respects limit — returns at most limit results', async () => {
+    const items = Array.from({ length: 6 }, (_, i) => ({
+      title: `Result ${i + 1}`,
+      url: `https://example.com/${i + 1}`,
+    }));
+    mockFetch(makeExaSseResponse(makeExaBlock(items)));
 
     const output = await webSearch('something', 3);
 
     expect(output.results).toHaveLength(3);
   });
 
-  test('returns fewer results than limit when fewer are available', async () => {
-    mockSearch.mockResolvedValue({ results: FAKE_RESULTS.slice(0, 2) } as never);
+  test('truncates description to 300 characters', async () => {
+    const longText = 'x'.repeat(500);
+    mockFetch(
+      makeExaSseResponse(
+        makeExaBlock([{ title: 'T', url: 'https://example.com', text: longText }]),
+      ),
+    );
 
-    const output = await webSearch('rare query', 5);
+    const output = await webSearch('long text');
 
-    expect(output.results).toHaveLength(2);
+    expect(output.results[0].description.length).toBe(300);
   });
 
-  test('returns empty results when search returns nothing', async () => {
-    mockSearch.mockResolvedValue({ results: [] } as never);
+  test('returns empty results when Exa content is empty', async () => {
+    mockFetch(makeExaSseResponse(''));
 
-    const output = await webSearch('no results here');
+    const output = await webSearch('no results');
 
     expect(output.results).toEqual([]);
   });
 
-  test('handles missing results field gracefully', async () => {
-    mockSearch.mockResolvedValue({} as never);
+  test('returns empty results when result has no content', async () => {
+    const payload = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { content: [] } });
+    mockFetch(`event: message\ndata: ${payload}\n`);
 
-    const output = await webSearch('edge case');
+    const output = await webSearch('empty content');
 
     expect(output.results).toEqual([]);
   });
 
-  test('fills missing description with empty string', async () => {
-    mockSearch.mockResolvedValue({
-      results: [{ title: 'No Desc', url: 'https://x.com', description: undefined }],
-    } as never);
+  test('throws on HTTP error response', async () => {
+    mockFetch('', 500);
 
-    const output = await webSearch('test');
-
-    expect(output.results[0].description).toBe('');
+    await expect(webSearch('error case')).rejects.toThrow('Exa search failed: 500');
   });
 
-  test('propagates search errors to caller', async () => {
-    mockSearch.mockRejectedValue(new Error('network failure'));
+  test('sends correct query to Exa MCP endpoint', async () => {
+    mockFetch(
+      makeExaSseResponse(
+        makeExaBlock([{ title: 'T', url: 'https://example.com' }]),
+      ),
+    );
 
-    await expect(webSearch('error case')).rejects.toThrow('network failure');
+    await webSearch('my specific query', 7);
+
+    const [url, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://mcp.exa.ai/mcp');
+    const body = JSON.parse(init.body as string);
+    expect(body.params.arguments.query).toBe('my specific query');
+    expect(body.params.arguments.numResults).toBe(7);
   });
 });

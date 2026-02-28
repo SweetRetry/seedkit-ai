@@ -37,6 +37,7 @@
     "@seedkit-ai/tools": "workspace:*",
     "ai": "^6.0.104",
     "commander": "^14.0.3",
+    "diff": "^8.0.3",
     "glob": "^13.0.6",
     "ink": "^6.8.0",
     "marked": "^15.0.12",
@@ -46,6 +47,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/diff": "^8.0.0",
     "@types/minimatch": "^6.0.0",
     "@types/node": "^25.0.3",
     "@types/react": "^19.2.14",

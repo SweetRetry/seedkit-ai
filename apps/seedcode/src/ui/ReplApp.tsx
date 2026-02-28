@@ -1,5 +1,6 @@
 import React, { useReducer, useCallback, useRef, useEffect } from 'react';
 import { Box } from 'ink';
+import type { ModelMessage } from 'ai';
 import type { Config } from '../config/schema.js';
 import type { SkillEntry } from '../context/index.js';
 import { handleSlashCommand, type SessionState } from '../commands/slash.js';
@@ -8,23 +9,38 @@ import { resolveMentions } from '../context/mentions.js';
 import { createSession, loadSession, listSessions, type SessionEntry } from '../sessions/index.js';
 import { clearMediaStore } from '../media-store.js';
 import { InputBox } from './InputBox.js';
+import { ModelPicker } from './pickers/ModelPicker.js';
+import { ResumePicker } from './pickers/ResumePicker.js';
+import { MemoryPicker } from './pickers/MemoryPicker.js';
+import { QuestionPrompt } from './QuestionPrompt.js';
 import { MessageList } from './MessageList.js';
 import { StatusBar } from './StatusBar.js';
 import { ActiveToolCallsView } from './ActiveToolCallsView.js';
 import { ConfirmPrompt } from './ConfirmPrompt.js';
+import { TodoListView } from './TodoListView.js';
 import { replReducer, type AppState } from './replReducer.js';
 import { useAgentContext } from './hooks/useAgentContext.js';
 import { useAgentStream, estimateContextPct } from './hooks/useAgentStream.js';
 
 export type { TurnEntry } from './replReducer.js';
 
+export interface SavedReplState {
+  messages: ModelMessage[];
+  sessionId: string;
+  turnCount: number;
+  staticTurns: import('./replReducer.js').TurnEntry[];
+  totalTokens: number;
+}
+
 interface ReplAppProps {
   config: Config;
   version: string;
   seed: ReturnType<typeof import('@seedkit-ai/ai-sdk-provider').createSeed>;
   onExit: () => void;
+  onOpenEditor: (filePath: string, saved: SavedReplState) => void;
   skipConfirm?: boolean;
   initialSkills?: SkillEntry[];
+  savedState?: SavedReplState;
 }
 
 const INITIAL_STATE = (initialConfig: Config, initialSkills: SkillEntry[]): AppState => ({
@@ -33,6 +49,7 @@ const INITIAL_STATE = (initialConfig: Config, initialSkills: SkillEntry[]): AppS
   activeReasoning: null,
   streaming: false,
   activeToolCalls: [],
+  activeTodos: [],
   pendingConfirm: null,
   pendingQuestion: null,
   liveConfig: initialConfig,
@@ -40,12 +57,17 @@ const INITIAL_STATE = (initialConfig: Config, initialSkills: SkillEntry[]): AppS
   waitingForModel: false,
   availableSkills: initialSkills,
   resumeSessions: null,
+  memoryPicker: false,
 });
 
-export function ReplApp({ config: initialConfig, version, seed, onExit, skipConfirm = false, initialSkills = [] }: ReplAppProps) {
+export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEditor, skipConfirm = false, initialSkills = [], savedState }: ReplAppProps) {
   const cwd = process.cwd();
 
-  const [state, dispatch] = useReducer(replReducer, undefined, () => INITIAL_STATE(initialConfig, initialSkills));
+  const [state, dispatch] = useReducer(replReducer, undefined, () => {
+    const base = INITIAL_STATE(initialConfig, initialSkills);
+    if (!savedState) return base;
+    return { ...base, staticTurns: savedState.staticTurns, totalTokens: savedState.totalTokens };
+  });
 
   // Single ref that always reflects current state — used by stable callbacks
   const stateRef = useRef(state);
@@ -54,6 +76,15 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
   const context = useAgentContext({ cwd, dispatch });
 
   const stream = useAgentStream({ cwd, skipConfirm, seed, dispatch, stateRef, context });
+
+  // Restore conversation state after returning from editor
+  useEffect(() => {
+    if (!savedState) return;
+    stream.messages.current = savedState.messages;
+    stream.turnCount.current = savedState.turnCount;
+    context.sessionIdRef.current = savedState.sessionId;
+    stream.todoStore.current = createTodoStore(cwd, savedState.sessionId);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Session management ─────────────────────────────────────────────────
 
@@ -68,10 +99,47 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
     stream.messages.current = loaded;
     stream.turnCount.current = loaded.filter((m) => m.role === 'user').length;
     context.sessionIdRef.current = sessionId;
+    stream.todoStore.current = createTodoStore(cwd, sessionId);
 
     const turns = loaded.flatMap((m): import('./replReducer.js').TurnEntry[] => {
-      if (m.role === 'user') return [{ type: 'user', content: typeof m.content === 'string' ? m.content : '' }];
-      if (m.role === 'assistant') return [{ type: 'assistant', content: typeof m.content === 'string' ? m.content : '', done: true }];
+      if (m.role === 'user') {
+        const text = typeof m.content === 'string'
+          ? m.content
+          : (m.content as Array<{ type: string; text?: string }>)
+              .filter((p) => p.type === 'text')
+              .map((p) => p.text ?? '')
+              .join('');
+        return text ? [{ type: 'user', content: text }] : [];
+      }
+
+      if (m.role === 'assistant') {
+        const entries: import('./replReducer.js').TurnEntry[] = [];
+
+        // Reconstruct tool call records
+        const parts = Array.isArray(m.content) ? m.content as Array<{ type: string; toolName?: string; toolCallId?: string; input?: unknown; args?: unknown }> : [];
+        for (const part of parts) {
+          if (part.type === 'tool-call') {
+            entries.push({
+              type: 'toolcall',
+              entry: {
+                id: part.toolCallId ?? '',
+                toolName: (part.toolName ?? 'unknown') as import('../tools/index.js').ToolName,
+                description: part.toolName ?? '',
+                status: 'done',
+              },
+            });
+          }
+        }
+
+        // Extract text content
+        const text = typeof m.content === 'string'
+          ? m.content
+          : parts.filter((p) => p.type === 'text').map((p) => (p as { text?: string }).text ?? '').join('');
+
+        if (text) entries.push({ type: 'assistant', content: text, done: true });
+        return entries;
+      }
+
       return [];
     });
     turns.push({ type: 'info', content: `✓ Resumed session ${sessionId.slice(0, 8)} (${loaded.length} messages)` });
@@ -94,6 +162,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
       sessionId: context.sessionIdRef.current,
       cwd,
       systemPrompt: context.systemPromptRef.current,
+      memoryFilePath: context.memoryFilePathRef.current,
       messageHistoryChars: JSON.stringify(stream.messages.current).length,
     } satisfies SessionState);
 
@@ -101,9 +170,10 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
     if (cmdResult.type === 'clear') {
       stream.messages.current = [];
       stream.turnCount.current = 0;
-      context.sessionIdRef.current = createSession(cwd);
+      const newSessionId = createSession(cwd);
+      context.sessionIdRef.current = newSessionId;
       clearMediaStore();
-      stream.todoStore.current = createTodoStore();
+      stream.todoStore.current = createTodoStore(cwd, newSessionId);
       dispatch({ type: 'CLEAR' });
       context.loadContext();
       dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: '✓ Conversation cleared. Context reloaded.' } });
@@ -135,6 +205,10 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
 
     if (cmdResult.type === 'compact') {
       void stream.runCompact(liveConfig);
+      return;
+    }
+    if (cmdResult.type === 'memory_picker') {
+      dispatch({ type: 'SET_MEMORY_PICKER', value: true });
       return;
     }
     if (cmdResult.type === 'resume') {
@@ -209,12 +283,36 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
     dispatch({ type: 'CONFIRM_TOOL', approved });
   }, []);
 
+  const handleMemorySelect = useCallback((filePath: string | null) => {
+    dispatch({ type: 'SET_MEMORY_PICKER', value: false });
+    if (filePath) {
+      onOpenEditor(filePath, {
+        messages: stream.messages.current,
+        sessionId: context.sessionIdRef.current,
+        turnCount: stream.turnCount.current,
+        staticTurns: stateRef.current.staticTurns,
+        totalTokens: stateRef.current.totalTokens,
+      });
+    }
+  }, [onOpenEditor, stream, context, stateRef]);
+
+  const handlePasteImage = useCallback((): { mediaId: string; byteSize: number } | null => {
+    try {
+      // Dynamic require to avoid top-level import on non-macOS
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { pasteImageFromClipboard } = require('../libs/clipboard.js') as typeof import('../libs/clipboard.js');
+      return pasteImageFromClipboard();
+    } catch {
+      return null;
+    }
+  }, []);
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   const {
     staticTurns, activeTurn, activeReasoning, streaming,
-    activeToolCalls, pendingConfirm, pendingQuestion,
-    liveConfig, waitingForModel, availableSkills, resumeSessions,
+    activeToolCalls, activeTodos, pendingConfirm, pendingQuestion,
+    liveConfig, waitingForModel, availableSkills, resumeSessions, memoryPicker,
   } = state;
 
   const maskedKey = liveConfig.apiKey
@@ -241,27 +339,37 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, skipConf
         isThinking={isThinking}
       />
 
+      <TodoListView todos={activeTodos} />
+
       <ActiveToolCallsView calls={activeToolCalls} onConfirm={handleConfirm} />
 
       <ConfirmPrompt pending={pendingConfirm} />
 
-      <InputBox
-        streaming={streaming}
-        waitingForConfirm={isWaitingForConfirm}
-        waitingForQuestion={isWaitingForQuestion ? pendingQuestion!.question : undefined}
-        questionOptions={isWaitingForQuestion ? (pendingQuestion!.options ?? []) : undefined}
-        waitingForModel={waitingForModel}
-        currentModel={liveConfig.model}
-        availableSkills={availableSkills}
-        resumeSessions={resumeSessions}
-        cwd={cwd}
-        onSubmit={handleSubmit}
-        onInterrupt={handleInterrupt}
-        onConfirm={isWaitingForConfirm ? handleConfirm : undefined}
-        onAnswer={isWaitingForQuestion ? handleAnswer : undefined}
-        onModelSelect={handleModelSelect}
-        onResumeSelect={handleResumeSelect}
-      />
+      {waitingForModel ? (
+        <ModelPicker currentModel={liveConfig.model} onSelect={handleModelSelect} />
+      ) : resumeSessions ? (
+        <ResumePicker sessions={resumeSessions} onSelect={handleResumeSelect} />
+      ) : memoryPicker ? (
+        <MemoryPicker memoryFilePath={context.memoryFilePathRef.current} onSelect={handleMemorySelect} />
+      ) : isWaitingForQuestion ? (
+        <QuestionPrompt
+          question={pendingQuestion!.question}
+          options={pendingQuestion!.options}
+          onAnswer={handleAnswer}
+          onInterrupt={handleInterrupt}
+        />
+      ) : (
+        <InputBox
+          streaming={streaming}
+          waitingForConfirm={isWaitingForConfirm}
+          availableSkills={availableSkills}
+          cwd={cwd}
+          onSubmit={handleSubmit}
+          onInterrupt={handleInterrupt}
+          onConfirm={isWaitingForConfirm ? handleConfirm : undefined}
+          onPasteImage={handlePasteImage}
+        />
+      )}
     </Box>
   );
 }

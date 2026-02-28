@@ -65,11 +65,13 @@ function buildToolDescription(toolName: string, input: Record<string, unknown>):
     case 'screenshot':
       return `display ${input.displayId ?? 1}`;
     case 'todoWrite':
-      return input.id ? `update task ${input.id}` : `create: ${input.subject}`;
+      return input.id ? `update task ${input.id}` : `create: ${input.content}`;
     case 'todoRead':
       return input.id ? `read task ${input.id}` : 'list all tasks';
     case 'loadSkill':
       return String(input.name ?? '');
+    case 'spawnAgent':
+      return String(input.task ?? '').slice(0, 60);
     default:
       return JSON.stringify(input);
   }
@@ -82,7 +84,7 @@ export function useAgentStream({
   const turnCount = useRef(0);
   const inFlight = useRef(false);
   const abortRef = useRef(false);
-  const todoStore = useRef(createTodoStore());
+  const todoStore = useRef(createTodoStore(cwd, context.sessionIdRef.current));
 
   const runStream = async (cfg: Config) => {
     let accumulated = '';
@@ -98,7 +100,11 @@ export function useAgentStream({
       dispatch({ type: 'SET_PENDING_QUESTION', pending });
     };
 
-    const tools = buildTools({ cwd, confirm, askQuestion, skipConfirm, todoStore: todoStore.current, availableSkills: context.availableSkillsRef.current });
+    const model = seed.chat(cfg.model as Parameters<typeof seed.chat>[0]);
+    const onTodoChange = (items: import('../../tools/todo.js').TodoItem[]) => {
+      dispatch({ type: 'SET_ACTIVE_TODOS', todos: items });
+    };
+    const tools = buildTools({ cwd, confirm, askQuestion, skipConfirm, todoStore: todoStore.current, availableSkills: context.availableSkillsRef.current, model, onTodoChange });
 
     const scheduleFlush = (text: string, done: boolean) => {
       accumulated = text;
@@ -152,7 +158,7 @@ export function useAgentStream({
 
     try {
       const result = streamText({
-        model: seed.chat(cfg.model as Parameters<typeof seed.chat>[0]),
+        model,
         system: context.getEffectiveSystemPrompt(),
         messages: messages.current,
         tools,
@@ -177,12 +183,18 @@ export function useAgentStream({
             for (const tc of step.toolCalls) {
               const tr = step.toolResults?.find((r) => r.toolCallId === tc.toolCallId);
               const isError = isToolError(tr?.output);
+              let doneOutput: string | undefined;
+              if (!isError && tc.toolName === 'bash' && tr?.output) {
+                const out = tr.output as { stdout?: string; stderr?: string };
+                const combined = [out.stdout, out.stderr].filter(Boolean).join('\n').trim();
+                doneOutput = combined || undefined;
+              }
               const entry: ToolCallEntry = {
                 id: tc.toolCallId,
                 toolName: tc.toolName as import('../../tools/index.js').ToolName,
                 description: buildToolDescription(tc.toolName, tc.input as Record<string, unknown>),
                 status: isError ? 'error' : 'done',
-                output: isError ? (tr?.output as import('../../tools/index.js').ToolError).error : undefined,
+                output: isError ? (tr?.output as import('../../tools/index.js').ToolError).error : doneOutput,
               };
               dispatch({ type: 'PUSH_STATIC', entry: { type: 'toolcall', entry } });
             }
@@ -265,7 +277,15 @@ export function useAgentStream({
           {
             role: 'user' as const,
             content:
-              'Produce a compact context summary of this conversation for your own use in continuing the session. Write in first-person as the assistant. Cover: decisions made, files modified, key facts established, and any open tasks. ≤500 words. Output only the summary text, no headings.',
+              'Produce a compact context summary of this conversation for your own use in continuing the session. ' +
+              'Write in first-person as the assistant. Be precise and technical — this summary will replace the full history. ' +
+              'You MUST cover (omit sections that have no content):\n' +
+              '1. FILES MODIFIED: exact paths, what changed and why\n' +
+              '2. ERRORS & FIXES: error messages encountered and how they were resolved\n' +
+              '3. KEY DECISIONS: architectural or approach choices made, with rationale\n' +
+              '4. OPEN TASKS: any todo items or work still in progress\n' +
+              '5. FACTS ESTABLISHED: API signatures, config values, dependency versions, or other facts confirmed\n' +
+              'Preserve file paths, function names, and error messages verbatim. ≤600 words. Output only the summary text, no headings or labels.',
           },
         ],
       });

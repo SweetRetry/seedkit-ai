@@ -1,26 +1,30 @@
 import { z } from 'zod';
-import { tool } from 'ai';
+import { tool, type LanguageModel } from 'ai';
 import { readFile } from './read.js';
 import { computeDiff, writeFile } from './write.js';
 import { computeEditDiff, applyEdit } from './edit.js';
 import { globFiles } from './glob.js';
 import { grepFiles } from './grep.js';
-import { runBash } from './bash.js';
+import { runBash, truncateBashOutput } from './bash.js';
 import { webSearch, webFetch } from '@seedkit-ai/tools';
 import { captureScreenshot, getDisplayList } from './screenshot.js';
 import { createTodoStore } from './todo.js';
 import { loadSkillBody, type SkillEntry } from '../context/skills.js';
+import { runDiagnostics, formatDiagnostics } from './diagnostics.js';
+import { buildSpawnAgentTool } from './spawn-agent.js';
 
-export type ToolName = 'read' | 'edit' | 'write' | 'glob' | 'grep' | 'bash' | 'webSearch' | 'webFetch' | 'listDisplays' | 'screenshot' | 'todoWrite' | 'todoRead' | 'askQuestion' | 'loadSkill';
+export type ToolName = 'read' | 'edit' | 'write' | 'glob' | 'grep' | 'bash' | 'webSearch' | 'webFetch' | 'listDisplays' | 'screenshot' | 'todoWrite' | 'todoRead' | 'askQuestion' | 'loadSkill' | 'spawnAgent';
 
 export { createTodoStore };
 export type { TodoStore, TodoItem } from './todo.js';
 
+export type DiffHunkLine = { kind: 'context' | 'removed' | 'added'; text: string; lineNo?: number };
+
 export type PendingConfirm = {
   toolName: ToolName;
   description: string;
-  /** For edit tool: inline diff lines to show */
-  diffLines?: { removed: string[]; added: string[] };
+  /** Unified diff hunk lines to show in confirmation */
+  diffHunk?: DiffHunkLine[];
   /** Resolve with true=approved, false=denied */
   resolve: (approved: boolean) => void;
 };
@@ -53,6 +57,8 @@ export function isToolError(output: unknown): output is ToolError {
   return typeof output === 'object' && output !== null && 'error' in output;
 }
 
+export type TodoChangeFn = (items: import('./todo.js').TodoItem[]) => void;
+
 export function buildTools(opts: {
   cwd: string;
   confirm: ConfirmFn;
@@ -60,29 +66,33 @@ export function buildTools(opts: {
   skipConfirm: boolean;
   todoStore: ReturnType<typeof createTodoStore>;
   availableSkills: SkillEntry[];
+  model: LanguageModel;
+  onTodoChange?: TodoChangeFn;
 }) {
-  const { cwd, confirm, askQuestion, skipConfirm, todoStore, availableSkills } = opts;
+  const { cwd, confirm, askQuestion, skipConfirm, todoStore, availableSkills, model, onTodoChange } = opts;
 
   const requestConfirm = (
     toolName: ToolName,
     description: string,
-    diffLines?: { removed: string[]; added: string[] }
+    diffHunk?: DiffHunkLine[]
   ): Promise<boolean> => {
     if (skipConfirm) return Promise.resolve(true);
     return new Promise<boolean>((resolve) => {
-      confirm({ toolName, description, diffLines, resolve });
+      confirm({ toolName, description, diffHunk, resolve });
     });
   };
 
   return {
     read: tool({
-      description: 'Read the contents of a file. Returns the content and line count.',
+      description: 'Read the contents of a file. For text files, returns content and line count. For image files (.png/.jpg/.jpeg/.gif/.webp/.bmp), stores the image for display in the next response and returns a mediaId.',
       inputSchema: z.object({
         path: z.string().describe('Path to the file to read (absolute or relative to CWD)'),
       }),
-      execute: async ({ path: filePath }): Promise<{ content: string; lineCount: number; warning?: string } | ToolError> => {
+      execute: async ({ path: filePath }): Promise<{ content: string; lineCount: number; warning?: string } | { mediaId: string; mediaType: string; byteSize: number } | ToolError> => {
         try {
-          const { content, lineCount, warning } = readFile(filePath);
+          const result = readFile(filePath);
+          if ('mediaId' in result) return result;
+          const { content, lineCount, warning } = result;
           return { content, lineCount, ...(warning ? { warning } : {}) };
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
@@ -103,18 +113,15 @@ export function buildTools(opts: {
           const diff = computeEditDiff(filePath, old_string, new_string);
           if ('error' in diff) return diff;
 
-          const approved = await requestConfirm(
-            'edit',
-            `Edit ${filePath}`,
-            { removed: diff.removedLines, added: diff.addedLines }
-          );
+          const approved = await requestConfirm('edit', `Edit ${filePath}`, diff.hunk);
           if (!approved) {
             return { error: 'User denied edit operation.' };
           }
 
           const result = applyEdit(filePath, old_string, new_string);
           if ('error' in result) return result;
-          return { success: true, message: result.message };
+          const diag = runDiagnostics(filePath, cwd);
+          return { success: true, message: result.message + formatDiagnostics(diag) };
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
         }
@@ -136,19 +143,18 @@ export function buildTools(opts: {
               ? `Create new file: ${filePath} (+${diff.added} lines)`
               : `Modify ${filePath}: +${diff.added} / -${diff.removed} lines`;
 
-          const approved = await requestConfirm('write', description);
+          const approved = await requestConfirm('write', description, diff.hunk);
           if (!approved) {
             return { error: 'User denied write operation.' };
           }
 
           writeFile(filePath, content);
-          return {
-            success: true,
-            message:
-              diff.oldContent === null
-                ? `Created ${filePath} (${diff.added} lines)`
-                : `Updated ${filePath} (+${diff.added} / -${diff.removed})`,
-          };
+          const diag = runDiagnostics(filePath, cwd);
+          const baseMsg =
+            diff.oldContent === null
+              ? `Created ${filePath} (${diff.added} lines)`
+              : `Updated ${filePath} (+${diff.added} / -${diff.removed})`;
+          return { success: true, message: baseMsg + formatDiagnostics(diag) };
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
         }
@@ -199,7 +205,12 @@ export function buildTools(opts: {
           if (!approved) {
             return { error: 'User denied bash execution.' };
           }
-          return runBash(command, cwd);
+          const result = runBash(command, cwd);
+          return {
+            ...result,
+            stdout: truncateBashOutput(result.stdout),
+            stderr: truncateBashOutput(result.stderr),
+          };
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
         }
@@ -323,8 +334,18 @@ export function buildTools(opts: {
       },
     }),
 
-    todoWrite: todoStore.todoWrite,
+    todoWrite: onTodoChange
+      ? {
+          ...todoStore.todoWrite,
+          execute: async (input: Parameters<NonNullable<typeof todoStore.todoWrite.execute>>[0], options: Parameters<NonNullable<typeof todoStore.todoWrite.execute>>[1]) => {
+            const result = await todoStore.todoWrite.execute!(input, options);
+            onTodoChange(Array.from(todoStore.items.values()));
+            return result;
+          },
+        }
+      : todoStore.todoWrite,
     todoRead: todoStore.todoRead,
+    spawnAgent: buildSpawnAgentTool(model, cwd),
   };
 }
 

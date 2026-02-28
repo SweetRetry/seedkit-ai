@@ -1,40 +1,21 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { Box, Text, useInput } from 'ink';
-import { deleteLeftOfCursor } from './inputEditing';
-import { SLASH_COMMANDS, AVAILABLE_MODELS } from '../commands/slash.js';
-import { globFiles } from '../tools/glob.js';
-import type { SessionEntry } from '../sessions/index.js';
+import { Box, Text, useInput, useStdout } from 'ink';
+import {
+  deleteLeftOfCursor,
+  normalizeLineEndings,
+  insertAtCursor,
+  prevWordBoundary,
+  nextWordBoundary,
+  getCursorLineCol,
+  computeMultilineViewport,
+  computeSingleLineViewport,
+} from './inputEditing.js';
+import { SLASH_COMMANDS } from '../commands/slash.js';
+import { searchTrackedFiles } from '../tools/glob.js';
 
 const HISTORY_MAX = 100;
 
 const EMPTY_SKILLS: Array<{ name: string; scope: 'global' | 'project' }> = [];
-
-interface QuestionOption {
-  label: string;
-  description?: string;
-}
-
-interface InputBoxProps {
-  streaming: boolean;
-  waitingForConfirm?: boolean;
-  /** When set, the agent is asking the user a question; value is the question text */
-  waitingForQuestion?: string;
-  /** Optional recommended options alongside the question */
-  questionOptions?: QuestionOption[];
-  waitingForModel?: boolean;
-  currentModel?: string;
-  availableSkills?: Array<{ name: string; scope: 'global' | 'project' }>;
-  resumeSessions?: SessionEntry[] | null;
-  /** Working directory used for @mention file glob suggestions */
-  cwd?: string;
-  onSubmit: (value: string) => void;
-  onInterrupt: () => void;
-  onConfirm?: (approved: boolean) => void;
-  /** Called with the user's free-text answer to the agent's question */
-  onAnswer?: (answer: string) => void;
-  onModelSelect?: (model: string | null) => void;
-  onResumeSelect?: (sessionId: string | null) => void;
-}
 
 type Suggestion = { label: string; complete: string; desc: string };
 
@@ -49,7 +30,6 @@ function getSuggestions(
   const query = raw.toLowerCase();
 
   const cmdMatches = SLASH_COMMANDS.filter((c) => c.name.startsWith(query));
-  // Match skills by the full "/skills:<name>" path prefix, so "/skill" matches all "/skills:xxx"
   const skillMatches = skills.filter((s) => `skills:${s.name}`.startsWith(query));
 
   const cmdSuggestions: Suggestion[] = cmdMatches.map((c) => ({
@@ -59,74 +39,102 @@ function getSuggestions(
   }));
   const skillSuggestions: Suggestion[] = skillMatches.map((s) => ({
     label: `/skills:${s.name}`,
-    complete: `/skills:${s.name} `,  // trailing space: fill input, don't auto-submit
+    complete: `/skills:${s.name} `,
     desc: `skill [${s.scope[0]}]`,
   }));
 
   const all = [...cmdSuggestions, ...skillSuggestions];
   if (all.length === 0) return null;
-  // Suppress when the sole match is a perfect command hit with no skill matches
   if (all.length === 1 && cmdMatches.length === 1 && cmdMatches[0].name === query && skillMatches.length === 0) return null;
   return all;
+}
+
+interface InputBoxProps {
+  streaming: boolean;
+  waitingForConfirm?: boolean;
+  availableSkills?: Array<{ name: string; scope: 'global' | 'project' }>;
+  /** Working directory used for @mention file glob suggestions */
+  cwd?: string;
+  onSubmit: (value: string) => void;
+  onInterrupt: () => void;
+  onConfirm?: (approved: boolean) => void;
+  onPasteImage?: () => { mediaId: string; byteSize: number } | null;
 }
 
 export function InputBox({
   streaming,
   waitingForConfirm = false,
-  waitingForQuestion,
-  questionOptions,
-  waitingForModel = false,
-  currentModel,
   availableSkills = EMPTY_SKILLS,
-  resumeSessions = null,
   cwd,
   onSubmit,
   onInterrupt,
   onConfirm,
-  onAnswer,
-  onModelSelect,
-  onResumeSelect,
+  onPasteImage,
 }: InputBoxProps) {
+  // ── Hooks called unconditionally at the top ─────────────────────────────
+  const { stdout } = useStdout();
+
   const [value, setValue] = useState('');
   const [cursor, setCursor] = useState(0);
   const [suggestionIdx, setSuggestionIdx] = useState(0);
-  const [resumeIdx, setResumeIdx] = useState(0);
-  // -1 means "typing freely", 0..N-1 means option highlighted
-  const [questionOptIdx, setQuestionOptIdx] = useState(-1);
-  // File suggestions from async glob for @mention autocomplete
+  const [pendingImages, setPendingImages] = useState<Array<{ mediaId: string; byteSize: number; index: number }>>([]);
+  const pendingImagesRef = useRef(pendingImages);
+  pendingImagesRef.current = pendingImages;
+  const imageCounterRef = useRef(0);
+  const [imageSelectIdx, setImageSelectIdx] = useState(-1);
+  const imageSelectIdxRef = useRef(-1);
+  imageSelectIdxRef.current = imageSelectIdx;
   const [fileSuggestions, setFileSuggestions] = useState<Suggestion[] | null>(null);
   const fileSuggestionsRef = useRef<Suggestion[] | null>(null);
   fileSuggestionsRef.current = fileSuggestions;
-  const [modelIdx, setModelIdx] = useState(() => {
-    const idx = AVAILABLE_MODELS.indexOf(currentModel as typeof AVAILABLE_MODELS[number]);
-    return idx >= 0 ? idx : 0;
-  });
 
   const valueRef = useRef(value);
   const cursorRef = useRef(cursor);
   const suggestionIdxRef = useRef(suggestionIdx);
-  const modelIdxRef = useRef(modelIdx);
-  const resumeIdxRef = useRef(resumeIdx);
-  const questionOptIdxRef = useRef(questionOptIdx);
   valueRef.current = value;
   cursorRef.current = cursor;
-  questionOptIdxRef.current = questionOptIdx;
   suggestionIdxRef.current = suggestionIdx;
-  modelIdxRef.current = modelIdx;
-  resumeIdxRef.current = resumeIdx;
 
   const historyRef = useRef<string[]>([]);
   const historyIdxRef = useRef(-1);
   const draftRef = useRef('');
-  const pendingLinesRef = useRef<string[]>([]);
+  const lastHistoryNavRef = useRef(0);
 
-  // Computed unconditionally (Rules of Hooks) — used only in the normal input render path.
   const slashSuggestions = useMemo(() => getSuggestions(value, availableSkills), [value, availableSkills]);
 
-  // Async @mention file suggestions — triggered by value changes
+  const termCols = stdout?.columns ?? 80;
+  const viewportWidth = Math.max(10, termCols - 3);
+
+  // Auto-convert pasted image file paths
+  useEffect(() => {
+    if (!onPasteImage) return;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed !== value || !trimmed.startsWith('/')) return;
+    const dotIdx = trimmed.lastIndexOf('.');
+    if (dotIdx < 0) return;
+    const ext = trimmed.slice(dotIdx).toLowerCase();
+    if (!['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].includes(ext)) return;
+
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      try {
+        const { loadImageFromPath } = require('../libs/clipboard.js') as typeof import('../libs/clipboard.js');
+        const result = loadImageFromPath(trimmed);
+        if (cancelled || !result) return;
+        const index = ++imageCounterRef.current;
+        setPendingImages((prev) => [...prev, { ...result, index }]);
+        update('', 0);
+      } catch {
+        // Not a valid image path or module unavailable
+      }
+    });
+    return () => { cancelled = true; };
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Async @mention file suggestions
   useEffect(() => {
     if (!cwd) { setFileSuggestions(null); return; }
-    // Match the last @token at or before the cursor (end of current word)
     const atMatch = /(?:^|\s)@(\S+)$/.exec(value);
     if (!atMatch || atMatch[1].length < 1) {
       setFileSuggestions(null);
@@ -134,32 +142,15 @@ export function InputBox({
     }
     const prefix = atMatch[1];
     let cancelled = false;
-    globFiles(`**/*${prefix}*`, cwd).then(({ files }) => {
+    searchTrackedFiles(prefix, cwd).then((files) => {
       if (cancelled) return;
-      const sug = files.slice(0, 8).map((f) => {
-        // Show path relative to cwd for readability
-        const rel = f.startsWith(cwd + '/') ? f.slice(cwd.length + 1) : f;
-        return { label: `@${rel}`, complete: `@${rel}`, desc: 'file' };
-      });
+      const sug = files.map((f) => ({ label: `@${f}`, complete: `@${f}`, desc: 'file' }));
       setFileSuggestions(sug.length > 0 ? sug : null);
     }).catch(() => setFileSuggestions(null));
     return () => { cancelled = true; };
   }, [value, cwd]);
 
-  // Combined suggestions: file suggestions take priority over slash suggestions
   const suggestions = fileSuggestions ?? slashSuggestions;
-
-  // Reset resume picker index when session list changes (new picker opened).
-  // Derive during render to avoid an extra re-render cycle from useEffect.
-  const prevResumeSessionsRef = useRef(resumeSessions);
-  if (prevResumeSessionsRef.current !== resumeSessions) {
-    prevResumeSessionsRef.current = resumeSessions;
-    if (resumeSessions) {
-      resumeIdxRef.current = 0;
-      // Sync state so the picker renders at index 0 immediately.
-      if (resumeIdx !== 0) setResumeIdx(0);
-    }
-  }
 
   const update = (newValue: string, newCursor: number) => {
     valueRef.current = newValue;
@@ -173,20 +164,26 @@ export function InputBox({
     historyIdxRef.current = -1;
     draftRef.current = '';
     setSuggestionIdx(0);
+    setPendingImages([]);
+    imageCounterRef.current = 0;
+    setImageSelectIdx(-1);
+    imageSelectIdxRef.current = -1;
   };
 
   useInput(
-    (input, key) => {
+    (rawInput, key) => {
+      // Normalize \r\n and \r to \n so the editing model never sees \r.
+      // Terminals send \r for Enter and for line breaks in pasted text;
+      // multi-char pastes arrive as one string containing raw \r bytes.
+      const input = normalizeLineEndings(rawInput);
+
       const val = valueRef.current;
       const cur = cursorRef.current;
       const sugIdx = suggestionIdxRef.current;
 
       if (key.ctrl && input === 'c') {
-        if (resumeSessions) { onResumeSelect?.(null); return; }
-        if (waitingForModel) { onModelSelect?.(null); return; }
         if (streaming || waitingForConfirm) { onInterrupt(); return; }
-        if (val.length > 0 || pendingLinesRef.current.length > 0) {
-          pendingLinesRef.current = [];
+        if (val.length > 0) {
           reset();
         } else {
           onInterrupt();
@@ -194,44 +191,66 @@ export function InputBox({
         return;
       }
 
-      // ── Resume picker mode ─────────────────────────────────────────────
-      if (resumeSessions) {
-        const sessions = resumeSessions;
-        const idx = resumeIdxRef.current;
-        if (key.upArrow) {
-          const next = idx <= 0 ? sessions.length - 1 : idx - 1;
-          setResumeIdx(next);
-          resumeIdxRef.current = next;
-          return;
+      if (key.ctrl && input === 'p' && onPasteImage && !streaming && !waitingForConfirm) {
+        const result = onPasteImage();
+        if (result) {
+          const index = ++imageCounterRef.current;
+          setPendingImages((prev) => [...prev, { ...result, index }]);
+          setImageSelectIdx(-1);
+          imageSelectIdxRef.current = -1;
         }
-        if (key.downArrow) {
-          const next = idx >= sessions.length - 1 ? 0 : idx + 1;
-          setResumeIdx(next);
-          resumeIdxRef.current = next;
-          return;
-        }
-        if (key.return) { onResumeSelect?.(sessions[idx].sessionId); return; }
-        if (key.escape) { onResumeSelect?.(null); return; }
         return;
       }
 
-      // ── Model picker mode ──────────────────────────────────────────────
-      if (waitingForModel) {
-        const idx = modelIdxRef.current;
+      // ── Image select mode ──────────────────────────────────────────────
+      if (imageSelectIdxRef.current >= 0) {
+        const imgs = pendingImagesRef.current;
+        const imgIdx = imageSelectIdxRef.current;
         if (key.upArrow) {
-          const next = idx <= 0 ? AVAILABLE_MODELS.length - 1 : idx - 1;
-          setModelIdx(next);
-          modelIdxRef.current = next;
+          const next = imgIdx <= 0 ? 0 : imgIdx - 1;
+          setImageSelectIdx(next);
+          imageSelectIdxRef.current = next;
           return;
         }
         if (key.downArrow) {
-          const next = idx >= AVAILABLE_MODELS.length - 1 ? 0 : idx + 1;
-          setModelIdx(next);
-          modelIdxRef.current = next;
+          if (imgIdx >= imgs.length - 1) {
+            setImageSelectIdx(-1);
+            imageSelectIdxRef.current = -1;
+          } else {
+            const next = imgIdx + 1;
+            setImageSelectIdx(next);
+            imageSelectIdxRef.current = next;
+          }
           return;
         }
-        if (key.return) { onModelSelect?.(AVAILABLE_MODELS[idx]); return; }
-        if (key.escape) { onModelSelect?.(null); return; }
+        if (key.escape) {
+          setImageSelectIdx(-1);
+          imageSelectIdxRef.current = -1;
+          return;
+        }
+        if (key.backspace || key.delete) {
+          const newImgs = imgs.filter((_, i) => i !== imgIdx);
+          setPendingImages(newImgs);
+          pendingImagesRef.current = newImgs;
+          if (newImgs.length === 0) {
+            setImageSelectIdx(-1);
+            imageSelectIdxRef.current = -1;
+          } else {
+            const next = Math.min(imgIdx, newImgs.length - 1);
+            setImageSelectIdx(next);
+            imageSelectIdxRef.current = next;
+          }
+          return;
+        }
+        if (!key.ctrl && !key.meta && input) {
+          setImageSelectIdx(-1);
+          imageSelectIdxRef.current = -1;
+          const v = valueRef.current;
+          const c = cursorRef.current;
+          const inserted = insertAtCursor(v, c, input);
+          update(inserted.value, inserted.cursor);
+          return;
+        }
         return;
       }
 
@@ -239,52 +258,6 @@ export function InputBox({
       if (waitingForConfirm && onConfirm) {
         if (input === 'y' || input === 'Y') { onConfirm(true); return; }
         if (input === 'n' || input === 'N' || key.escape) { onConfirm(false); return; }
-        return;
-      }
-
-      // ── Question mode (free-text answer or option pick) ────────────────
-      if (waitingForQuestion && onAnswer) {
-        const opts = questionOptions ?? [];
-        const optIdx = questionOptIdxRef.current;
-
-        if (key.upArrow && opts.length > 0) {
-          const next = optIdx <= 0 ? opts.length - 1 : optIdx - 1;
-          setQuestionOptIdx(next);
-          questionOptIdxRef.current = next;
-          return;
-        }
-        if (key.downArrow && opts.length > 0) {
-          const next = optIdx >= opts.length - 1 ? 0 : optIdx + 1;
-          setQuestionOptIdx(next);
-          questionOptIdxRef.current = next;
-          return;
-        }
-        if (key.return) {
-          if (optIdx >= 0 && opts[optIdx]) {
-            const answer = opts[optIdx].label;
-            reset();
-            setQuestionOptIdx(-1);
-            onAnswer(answer);
-          } else {
-            const answer = val.trim();
-            reset();
-            setQuestionOptIdx(-1);
-            onAnswer(answer);
-          }
-          return;
-        }
-        if (key.escape) { reset(); setQuestionOptIdx(-1); onAnswer(''); return; }
-        // Any character typed clears option selection and enters free-text mode
-        if (key.backspace || (key.delete && input === '\x7f')) {
-          if (optIdx >= 0) { setQuestionOptIdx(-1); questionOptIdxRef.current = -1; return; }
-          const next = deleteLeftOfCursor(val, cur); update(next.value, next.cursor); return;
-        }
-        if (key.leftArrow) { setQuestionOptIdx(-1); update(val, Math.max(0, cur - 1)); return; }
-        if (key.rightArrow) { setQuestionOptIdx(-1); update(val, Math.min(val.length, cur + 1)); return; }
-        if (!key.ctrl && !key.meta && input) {
-          if (optIdx >= 0) setQuestionOptIdx(-1);
-          update(val.slice(0, cur) + input + val.slice(cur), cur + input.length);
-        }
         return;
       }
 
@@ -296,8 +269,6 @@ export function InputBox({
         return;
       }
 
-      // fileSuggestionsRef gives sync access to the async file-suggestion state.
-      // File suggestions take priority over slash suggestions.
       const activeSuggestions = fileSuggestionsRef.current ?? getSuggestions(val, availableSkills);
       const isFileSuggestion = fileSuggestionsRef.current !== null;
 
@@ -314,22 +285,14 @@ export function InputBox({
         setSuggestionIdx(0);
 
         if (isFileSuggestion) {
-          // Replace the trailing @prefix token with the selected @fullpath
+          // Always just complete into the input — never auto-submit.
+          // User can press Enter again (with no suggestions open) to send.
           const replaced = val.replace(/(?:^|\s)@\S+$/, (m) => {
             const leadingSpace = m.startsWith(' ') ? ' ' : '';
-            return `${leadingSpace}${sug.complete}`;
+            return `${leadingSpace}${sug.complete} `;
           });
           update(replaced, replaced.length);
           setFileSuggestions(null);
-          if (key.return) {
-            const trimmed = replaced.trim();
-            reset();
-            if (trimmed) {
-              if (historyRef.current[0] !== trimmed)
-                historyRef.current = [trimmed, ...historyRef.current].slice(0, HISTORY_MAX);
-              onSubmit(trimmed);
-            }
-          }
         } else {
           update(sug.complete, sug.complete.length);
           if (key.return && !sug.complete.endsWith(' ')) {
@@ -345,12 +308,11 @@ export function InputBox({
 
       if (key.return) {
         if (val.endsWith('\\')) {
-          pendingLinesRef.current = [...pendingLinesRef.current, val.slice(0, -1)];
-          update('', 0);
+          const newVal = val.slice(0, -1) + '\n';
+          update(newVal, newVal.length);
           return;
         }
-        const trimmed = [...pendingLinesRef.current, val].join('\n').trim();
-        pendingLinesRef.current = [];
+        const trimmed = val.trim();
         reset();
         if (trimmed) {
           if (historyRef.current[0] !== trimmed)
@@ -360,8 +322,31 @@ export function InputBox({
         return;
       }
 
-      if (!activeSuggestions && pendingLinesRef.current.length === 0) {
+      const isMultilineVal = val.includes('\n');
+
+      if (!activeSuggestions) {
         if (key.upArrow) {
+          if (isMultilineVal) {
+            const { lineIdx, col } = getCursorLineCol(val, cur);
+            if (lineIdx > 0) {
+              const lines = val.split('\n');
+              const targetLine = lines[lineIdx - 1];
+              const targetCol = Math.min(col, targetLine.length);
+              const newPos = lines.slice(0, lineIdx - 1).join('\n').length + (lineIdx - 1 > 0 ? 1 : 0) + targetCol;
+              update(val, newPos);
+              return;
+            }
+            return;
+          }
+          const now = Date.now();
+          if (now - lastHistoryNavRef.current < 150) return;
+          lastHistoryNavRef.current = now;
+          if (historyIdxRef.current === -1 && pendingImagesRef.current.length > 0) {
+            const lastIdx = pendingImagesRef.current.length - 1;
+            setImageSelectIdx(lastIdx);
+            imageSelectIdxRef.current = lastIdx;
+            return;
+          }
           const history = historyRef.current;
           if (history.length === 0) return;
           if (historyIdxRef.current === -1) draftRef.current = val;
@@ -372,6 +357,21 @@ export function InputBox({
           return;
         }
         if (key.downArrow) {
+          if (isMultilineVal) {
+            const { lineIdx, col } = getCursorLineCol(val, cur);
+            const lines = val.split('\n');
+            if (lineIdx < lines.length - 1) {
+              const targetLine = lines[lineIdx + 1];
+              const targetCol = Math.min(col, targetLine.length);
+              const newPos = lines.slice(0, lineIdx + 1).join('\n').length + 1 + targetCol;
+              update(val, newPos);
+              return;
+            }
+            return;
+          }
+          const now = Date.now();
+          if (now - lastHistoryNavRef.current < 150) return;
+          lastHistoryNavRef.current = now;
           if (historyIdxRef.current === -1) return;
           const nextIdx = historyIdxRef.current - 1;
           historyIdxRef.current = nextIdx;
@@ -381,20 +381,47 @@ export function InputBox({
         }
       }
 
-      if (key.leftArrow) { update(val, Math.max(0, cur - 1)); return; }
-      if (key.rightArrow) { update(val, Math.min(val.length, cur + 1)); return; }
+      if (key.leftArrow) {
+        if (cur > 0 && val[cur - 1] === '\n') { update(val, cur - 1); }
+        else { update(val, Math.max(0, cur - 1)); }
+        return;
+      }
+      if (key.rightArrow) {
+        if (cur < val.length && val[cur] === '\n') { update(val, cur + 1); }
+        else { update(val, Math.min(val.length, cur + 1)); }
+        return;
+      }
       if ((key.meta && key.leftArrow) || (key.ctrl && input === 'b')) { update(val, prevWordBoundary(val, cur)); return; }
       if ((key.meta && key.rightArrow) || (key.ctrl && input === 'f')) { update(val, nextWordBoundary(val, cur)); return; }
-      if (key.ctrl && input === 'a') { update(val, 0); return; }
-      if (key.ctrl && input === 'e') { update(val, val.length); return; }
-      if (key.ctrl && input === 'k') { update(val.slice(0, cur), cur); return; }
-      if (key.ctrl && input === 'u') { update(val.slice(cur), 0); return; }
+      if (key.ctrl && input === 'a') {
+        const lineStart = val.lastIndexOf('\n', cur - 1) + 1;
+        update(val, lineStart);
+        return;
+      }
+      if (key.ctrl && input === 'e') {
+        const nextNl = val.indexOf('\n', cur);
+        update(val, nextNl === -1 ? val.length : nextNl);
+        return;
+      }
+      if (key.ctrl && input === 'k') {
+        const nextNl = val.indexOf('\n', cur);
+        if (nextNl === -1) { update(val.slice(0, cur), cur); }
+        else { update(val.slice(0, cur) + val.slice(nextNl), cur); }
+        return;
+      }
+      if (key.ctrl && input === 'u') {
+        const lineStart = val.lastIndexOf('\n', cur - 1) + 1;
+        update(val.slice(0, lineStart) + val.slice(cur), lineStart);
+        return;
+      }
 
       if (key.backspace || (key.delete && input === '\x7f')) {
-        const next = deleteLeftOfCursor(val, cur); update(next.value, next.cursor); return;
+        const next = deleteLeftOfCursor(val, cur); update(next.value, next.cursor);
+        return;
       }
       if (key.delete && input === '') {
-        const next = deleteLeftOfCursor(val, cur); update(next.value, next.cursor); return;
+        const next = deleteLeftOfCursor(val, cur); update(next.value, next.cursor);
+        return;
       }
 
       if (key.ctrl || key.meta) return;
@@ -402,150 +429,33 @@ export function InputBox({
       if (input) {
         if (historyIdxRef.current !== -1) { historyIdxRef.current = -1; draftRef.current = ''; }
         setSuggestionIdx(0);
-        update(val.slice(0, cur) + input + val.slice(cur), cur + input.length);
+        const inserted = insertAtCursor(val, cur, input);
+        update(inserted.value, inserted.cursor);
       }
     },
     { isActive: true }
   );
 
-  // ── Resume picker UI ─────────────────────────────────────────────────────
-  if (resumeSessions) {
-    return (
-      <Box flexDirection="column">
-        <Box marginBottom={1}>
-          <Text dimColor>  Resume session  </Text>
-          <Text dimColor>↑↓ move · Enter confirm · Esc cancel</Text>
-        </Box>
-        {resumeSessions.map((s, i) => {
-          const selected = i === resumeIdx;
-          const date = new Date(s.modified).toLocaleString(undefined, {
-            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-          });
-          const preview = s.firstPrompt.length > 50
-            ? s.firstPrompt.slice(0, 50) + '…'
-            : s.firstPrompt;
-          const label = `${s.sessionId.slice(0, 8)}  ${date}  (${s.messageCount} msgs)${s.gitBranch ? `  [${s.gitBranch}]` : ''}`;
-          return (
-            <Box key={s.sessionId} flexDirection="column" marginLeft={2}>
-              {selected
-                ? <Text bold color="cyan" inverse>{` ${label} `}</Text>
-                : <Text>{label}</Text>
-              }
-              {preview && (
-                <Box marginLeft={selected ? 1 : 0}>
-                  <Text dimColor>{`  ${preview}`}</Text>
-                </Box>
-              )}
-            </Box>
-          );
-        })}
-      </Box>
-    );
-  }
+  // ── Pre-compute viewport (must run before any early return to satisfy hooks rules) ──
+  const isMultiline = value.includes('\n');
+  const MAX_VISIBLE_LINES = 10;
 
-  // ── Model picker UI ──────────────────────────────────────────────────────
-  if (waitingForModel) {
-    return (
-      <Box flexDirection="column">
-        <Box marginBottom={1}>
-          <Text dimColor>  Select model  </Text>
-          <Text dimColor>↑↓ move · Enter confirm · Esc cancel</Text>
-        </Box>
-        {AVAILABLE_MODELS.map((m, i) => {
-          const selected = i === modelIdx;
-          const isCurrent = m === currentModel;
-          return (
-            <Box key={m} marginLeft={2}>
-              {selected
-                ? <Text bold color="cyan" inverse>{` ${m} `}</Text>
-                : <Text color={isCurrent ? 'cyan' : undefined}>{m}</Text>
-              }
-              {isCurrent && !selected && <Text dimColor>  current</Text>}
-            </Box>
-          );
-        })}
-      </Box>
-    );
-  }
+  const { visibleLines, totalLines } = useMemo(
+    () => computeMultilineViewport(value, cursor, viewportWidth, MAX_VISIBLE_LINES),
+    [value, cursor, viewportWidth],
+  );
+
+  const singleLineView = useMemo(
+    () => isMultiline ? { before: '', atCursor: '', after: '' } : computeSingleLineViewport(value, cursor, viewportWidth),
+    [value, cursor, viewportWidth, isMultiline],
+  );
+
+  // ── Render ──────────────────────────────────────────────────────────────
 
   if (waitingForConfirm) {
     return (
       <Box>
         <Text dimColor>  [y/n to confirm · Ctrl+C to cancel]</Text>
-      </Box>
-    );
-  }
-
-  if (waitingForQuestion) {
-    const opts = questionOptions ?? [];
-    const hasOptions = opts.length > 0;
-    const optIdx = questionOptIdx;
-    const isFreeTyping = !hasOptions || optIdx < 0;
-    const before = value.slice(0, cursor);
-    const atCursor = value[cursor] ?? ' ';
-    const after = value.slice(cursor + 1);
-    return (
-      <Box flexDirection="column" marginTop={1}>
-        {/* Question header */}
-        <Box gap={1}>
-          <Text backgroundColor="cyan" color="black" bold>{' ? '}</Text>
-          <Text bold color="cyan">{waitingForQuestion}</Text>
-        </Box>
-
-        {/* Option list */}
-        {hasOptions && (
-          <Box flexDirection="column" marginTop={1} marginLeft={2}>
-            {opts.map((opt, i) => {
-              const selected = i === optIdx;
-              return (
-                <Box key={i} flexDirection="column">
-                  {selected
-                    ? (
-                      <Box gap={1}>
-                        <Text color="cyan" bold>{'›'}</Text>
-                        <Text bold color="cyan" inverse>{` ${opt.label} `}</Text>
-                      </Box>
-                    )
-                    : (
-                      <Box gap={1}>
-                        <Text dimColor>{'·'}</Text>
-                        <Text>{opt.label}</Text>
-                      </Box>
-                    )
-                  }
-                  {opt.description && (
-                    <Box marginLeft={3}>
-                      <Text dimColor>{opt.description}</Text>
-                    </Box>
-                  )}
-                </Box>
-              );
-            })}
-          </Box>
-        )}
-
-        {/* Free-text input row */}
-        <Box marginTop={1}>
-          <Text color="cyan" bold>{'› '}</Text>
-          {isFreeTyping
-            ? (
-              <>
-                <Text>{before}</Text>
-                <Text inverse>{atCursor}</Text>
-                <Text>{after}</Text>
-              </>
-            )
-            : <Text dimColor>or type a custom answer…</Text>
-          }
-        </Box>
-        <Box>
-          <Text dimColor>
-            {hasOptions
-              ? '  ↑↓ pick option · Enter confirm · or type to answer freely · Esc skip'
-              : '  Enter to answer · Esc to skip · Ctrl+C to cancel'
-            }
-          </Text>
-        </Box>
       </Box>
     );
   }
@@ -558,29 +468,84 @@ export function InputBox({
     );
   }
 
-  const before = value.slice(0, cursor);
-  const atCursor = value[cursor] ?? ' ';
-  const after = value.slice(cursor + 1);
-  const isMultiline = pendingLinesRef.current.length > 0;
+  const isImageSelectMode = imageSelectIdx >= 0 && pendingImages.length > 0;
 
   return (
     <Box flexDirection="column">
-      {isMultiline && (
-        <Box flexDirection="column">
-          {pendingLinesRef.current.map((line, i) => (
-            <Box key={`pending-${i}`}>
-              <Text dimColor>{'  '}</Text>
-              <Text dimColor>{line}</Text>
+      {pendingImages.length > 0 && (
+        <Box flexDirection="column" marginBottom={0}>
+          {pendingImages.map((img, i) => {
+            const selected = isImageSelectMode && i === imageSelectIdx;
+            const kb = Math.round(img.byteSize / 1024) || '<1';
+            return (
+              <Box key={img.mediaId} gap={1} paddingLeft={2}>
+                {selected
+                  ? (
+                    <>
+                      <Text color="cyan" bold>{'\u203A'}</Text>
+                      <Text color="cyan" bold inverse>{` [Image ${img.index}] `}</Text>
+                      <Text dimColor>{`${kb} KB`}</Text>
+                      <Text dimColor>  Del to remove · ↓/Esc to exit</Text>
+                    </>
+                  )
+                  : (
+                    <>
+                      <Text dimColor>{'  '}</Text>
+                      <Text color="cyan">{`[Image ${img.index}]`}</Text>
+                      <Text dimColor>{`${kb} KB`}</Text>
+                    </>
+                  )
+                }
+              </Box>
+            );
+          })}
+          {!isImageSelectMode && (
+            <Box paddingLeft={2}>
+              <Text dimColor>Ctrl+P to paste more · ↑ to select · images will be sent with next message</Text>
             </Box>
-          ))}
+          )}
         </Box>
       )}
-      <Box>
-        <Text color="cyan" bold>{isMultiline ? '… ' : '› '}</Text>
-        <Text>{before}</Text>
-        <Text inverse>{atCursor}</Text>
-        <Text>{after}</Text>
-      </Box>
+      {isImageSelectMode
+        ? (
+          <Box>
+            <Text dimColor>{'› '}</Text>
+            <Text dimColor>{value || '(type a message)'}</Text>
+          </Box>
+        )
+        : isMultiline
+          ? (
+            <Box flexDirection="column">
+              {totalLines > MAX_VISIBLE_LINES && visibleLines[0]?.origIdx > 0 && (
+                <Box marginLeft={2}>
+                  <Text dimColor>{`  ↑ ${visibleLines[0].origIdx} more line${visibleLines[0].origIdx > 1 ? 's' : ''}`}</Text>
+                </Box>
+              )}
+              {visibleLines.map((rl, i) => (
+                <Box key={i}>
+                  <Text color="cyan" bold>{rl.isFirst ? '› ' : '… '}</Text>
+                  {rl.hasCursor
+                    ? <><Text>{rl.before}</Text><Text inverse>{rl.atCursor}</Text><Text>{rl.after}</Text></>
+                    : <Text>{rl.text}</Text>
+                  }
+                </Box>
+              ))}
+              {totalLines > MAX_VISIBLE_LINES && (
+                <Box marginLeft={2}>
+                  <Text dimColor>{`  ${totalLines} lines total · \\ to add newline`}</Text>
+                </Box>
+              )}
+            </Box>
+          )
+          : (
+            <Box>
+              <Text color="cyan" bold>{'› '}</Text>
+              <Text>{singleLineView.before}</Text>
+              <Text inverse>{singleLineView.atCursor}</Text>
+              <Text>{singleLineView.after}</Text>
+            </Box>
+          )
+      }
       {suggestions && (
         <Box flexDirection="column" marginLeft={2}>
           {suggestions.map((s, i) => {
@@ -599,18 +564,4 @@ export function InputBox({
       )}
     </Box>
   );
-}
-
-function prevWordBoundary(value: string, pos: number): number {
-  let i = pos - 1;
-  while (i > 0 && value[i] === ' ') i--;
-  while (i > 0 && value[i - 1] !== ' ') i--;
-  return Math.max(0, i);
-}
-
-function nextWordBoundary(value: string, pos: number): number {
-  let i = pos;
-  while (i < value.length && value[i] !== ' ') i++;
-  while (i < value.length && value[i] === ' ') i++;
-  return Math.min(value.length, i);
 }

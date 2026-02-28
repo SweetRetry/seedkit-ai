@@ -21,6 +21,7 @@ export type SlashCommandResult =
   | { type: 'compact' }
   | { type: 'resume'; sessionId: string }
   | { type: 'resume_picker' }
+  | { type: 'memory_picker' }
   | { type: 'not_command' };
 
 export interface SessionState {
@@ -32,6 +33,7 @@ export interface SessionState {
   sessionId: string;
   cwd: string;
   systemPrompt: string;
+  memoryFilePath: string;
   /** Serialised byte length of the current message history (for token estimation) */
   messageHistoryChars: number;
 }
@@ -77,6 +79,9 @@ export function handleSlashCommand(
     case 'compact':
       return { type: 'compact' };
 
+    case 'memory':
+      return { type: 'memory_picker' };
+
     case 'sessions':
       return { type: 'handled', output: buildSessionsList(state) };
 
@@ -105,6 +110,7 @@ export const SLASH_COMMANDS: Array<{ name: string; args?: string; desc: string }
   { name: 'thinking', desc: 'toggle extended thinking' },
   { name: 'skills',   desc: 'list skills · /skills:<name> to activate' },
   { name: 'compact',  desc: 'summarise history' },
+  { name: 'memory',   desc: 'open project memory file in $EDITOR' },
   { name: 'exit',     desc: 'end session' },
 ];
 
