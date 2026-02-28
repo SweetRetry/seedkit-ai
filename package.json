@@ -10,8 +10,8 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "test:watch": "turbo run test:watch",
-    "dev:website": "turbo run dev --filter=website",
-    "build:website": "turbo run build --filter=website"
+    "dev:docs": "turbo run dev --filter=docs",
+    "build:docs": "turbo run build --filter=docs"
   },
   "engines": {
     "node": ">=18"
