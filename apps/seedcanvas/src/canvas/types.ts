@@ -1,27 +1,27 @@
-import type { Node, Edge } from '@xyflow/react'
+import type { Edge, Node } from "@xyflow/react"
 
-// --- Node Data ---
+// --- History Entry (LRU, max 20) ---
 
-export interface TextNodeData extends Record<string, unknown> {
-  content: string
-  label?: string
+export type HistoryResult =
+  | { type: "text"; content: string }
+  | { type: "image"; url: string; width: number; height: number }
+  | { type: "video"; url: string; width: number; height: number }
+
+export interface HistoryEntry {
+  id: string
+  parameters: Record<string, unknown>
+  result: HistoryResult
+  createdAt: string
 }
 
-export interface ImageNodeData extends Record<string, unknown> {
-  assetPath: string
-  width: number
-  height: number
-  label?: string
-}
+export const MAX_HISTORYS = 20
 
-export interface VideoNodeData extends Record<string, unknown> {
-  assetPath: string
-  width: number
-  height: number
-  label?: string
-}
+// --- Node Data (unified) ---
 
-export type CanvasNodeData = TextNodeData | ImageNodeData | VideoNodeData
+export interface CanvasNodeData extends Record<string, unknown> {
+  uiInfo: { title: string }
+  historys: HistoryEntry[]
+}
 
 // --- Typed ReactFlow Nodes & Edges ---
 

@@ -1,5 +1,11 @@
-import type { NodeTypes } from '@xyflow/react'
+import type { NodeTypes } from "@xyflow/react"
+import { ImageNode } from "./ImageNode"
+import { TextNode } from "./TextNode"
+import { VideoNode } from "./VideoNode"
 
-// Custom node types will be registered here in Phase 2.
 // Defined at module level to avoid re-creating the object on each render.
-export const nodeTypes: NodeTypes = {}
+export const nodeTypes: NodeTypes = {
+  text: TextNode,
+  image: ImageNode,
+  video: VideoNode,
+}

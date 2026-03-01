@@ -1,12 +1,6 @@
-import './App.css'
-import { Canvas } from './canvas/Canvas'
-import { Sidebar } from './sidebar/Sidebar'
+import "./App.css"
+import { Outlet } from "@tanstack/react-router"
 
-export default function App() {
-  return (
-    <div className="flex h-full w-full">
-      <Sidebar />
-      <Canvas />
-    </div>
-  )
+export function RootLayout() {
+  return <Outlet />
 }

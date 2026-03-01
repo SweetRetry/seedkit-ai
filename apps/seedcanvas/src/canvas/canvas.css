@@ -1,0 +1,66 @@
+/*
+ * xyflow theme overrides — maps --xy-* variables to our design tokens.
+ *
+ * Token source: src/App.css  (:root / .dark)
+ * Variable cascade: --xy-<name>-props > --xy-<name> > --xy-<name>-default
+ * We override the middle tier (--xy-<name>) so component props can still win.
+ */
+
+/* ── Light theme ────────────────────────────────────────────────── */
+
+.react-flow {
+  /* Canvas */
+  --xy-background-color: var(--background);
+  --xy-background-pattern-dots-color: var(--border);
+
+  /* Selection */
+  --xy-selection-background-color: oklch(from var(--primary) l c h / 0.08);
+  --xy-selection-border: 1px dotted oklch(from var(--primary) l c h / 0.8);
+
+  /* Nodes */
+  --xy-node-color: var(--foreground);
+  --xy-node-background-color: var(--card);
+  --xy-node-border: 1px solid var(--border);
+  --xy-node-border-radius: var(--radius);
+  --xy-node-boxshadow-hover: 0 1px 4px 1px oklch(from var(--foreground) l c h / 0.08);
+  --xy-node-boxshadow-selected: 0 0 0 1.5px var(--primary);
+  --xy-node-group-background-color: oklch(from var(--muted) l c h / 0.25);
+
+  /* Edges */
+  --xy-edge-stroke: var(--border);
+  --xy-edge-stroke-selected: var(--primary);
+  --xy-edge-label-background-color: var(--card);
+  --xy-edge-label-color: var(--foreground);
+
+  /* Connection line */
+  --xy-connectionline-stroke: var(--primary);
+
+  /* Handles */
+  --xy-handle-background-color: var(--primary);
+  --xy-handle-border-color: var(--card);
+
+  /* Minimap */
+  --xy-minimap-background-color: var(--card);
+  --xy-minimap-mask-background-color: oklch(from var(--muted) l c h / 0.6);
+  --xy-minimap-node-background-color: var(--muted);
+
+  /* Controls */
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--muted);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color-hover: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-box-shadow: 0 0 2px 1px oklch(from var(--foreground) l c h / 0.08);
+
+  /* Resize */
+  --xy-resize-background-color: var(--primary);
+
+  /* Attribution */
+  --xy-attribution-background-color: oklch(from var(--card) l c h / 0.5);
+}
+
+/* ── Dark theme ─────────────────────────────────────────────────── */
+
+.dark .react-flow {
+  --xy-node-boxshadow-hover: 0 1px 4px 1px oklch(from var(--foreground) l c h / 0.06);
+}
