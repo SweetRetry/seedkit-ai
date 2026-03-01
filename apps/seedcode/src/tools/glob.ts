@@ -2,9 +2,13 @@ import { glob as globAsync } from 'glob';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 
+const MAX_FILES = 200;
+
 export interface GlobResult {
   files: string[];
   count: number;
+  totalCount: number;
+  truncated: boolean;
 }
 
 export async function globFiles(pattern: string, cwd?: string): Promise<GlobResult> {
@@ -16,7 +20,14 @@ export async function globFiles(pattern: string, cwd?: string): Promise<GlobResu
   });
 
   const sorted = files.sort().map((f) => path.join(baseCwd, f));
-  return { files: sorted, count: sorted.length };
+  const totalCount = sorted.length;
+  const truncated = totalCount > MAX_FILES;
+  return {
+    files: truncated ? sorted.slice(0, MAX_FILES) : sorted,
+    count: Math.min(totalCount, MAX_FILES),
+    totalCount,
+    truncated,
+  };
 }
 
 /**

@@ -18,7 +18,11 @@ function isDenied(filePath: string): boolean {
   return DENY_LIST.some((pattern) => minimatch(rel, pattern, { dot: true }));
 }
 
-const LARGE_FILE_WARN_LINES = 500;
+/** Default: read up to 2000 lines from the start */
+const DEFAULT_LIMIT = 2000;
+/** Truncate any single line longer than this */
+const MAX_LINE_CHARS = 2000;
+
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 
 function mediaTypeForExt(ext: string): string {
@@ -35,6 +39,7 @@ function mediaTypeForExt(ext: string): string {
 
 export interface ReadResult {
   content: string;
+  /** Total lines in the file (not just what was returned) */
   lineCount: number;
   warning?: string;
 }
@@ -45,7 +50,19 @@ export interface ReadImageResult {
   byteSize: number;
 }
 
-export function readFile(filePath: string): ReadResult | ReadImageResult {
+/**
+ * Read a file with optional offset/limit pagination.
+ *
+ * - Default: returns up to 2000 lines from line 1, in cat -n format.
+ * - offset: 0-based line offset to start from.
+ * - limit: max number of lines to return.
+ * - Lines longer than 2000 chars are truncated.
+ */
+export function readFile(
+  filePath: string,
+  offset?: number,
+  limit?: number,
+): ReadResult | ReadImageResult {
   const abs = path.resolve(filePath);
 
   if (isDenied(abs)) {
@@ -69,13 +86,32 @@ export function readFile(filePath: string): ReadResult | ReadImageResult {
     return { mediaId, mediaType, byteSize: buffer.length };
   }
 
-  const content = fs.readFileSync(abs, 'utf-8');
-  const lineCount = content.split('\n').length;
+  const raw = fs.readFileSync(abs, 'utf-8');
+  const allLines = raw.split('\n');
+  const totalLineCount = allLines.length;
 
-  const warning =
-    lineCount > LARGE_FILE_WARN_LINES
-      ? `Large file: ${lineCount} lines. Consider reading a specific line range if you only need part of it.`
-      : undefined;
+  const startOffset = offset ?? 0;
+  const maxLines = limit ?? DEFAULT_LIMIT;
+  const sliced = allLines.slice(startOffset, startOffset + maxLines);
 
-  return { content, lineCount, warning };
+  // cat -n format with per-line truncation
+  const numbered = sliced
+    .map((line, i) => {
+      const lineNo = startOffset + i + 1;
+      const truncatedLine = line.length > MAX_LINE_CHARS
+        ? line.slice(0, MAX_LINE_CHARS) + '… [line truncated]'
+        : line;
+      return `${String(lineNo).padStart(6, ' ')}\t${truncatedLine}`;
+    })
+    .join('\n');
+
+  const returnedEnd = Math.min(startOffset + maxLines, totalLineCount);
+  const hasMore = returnedEnd < totalLineCount;
+
+  let warning: string | undefined;
+  if (hasMore) {
+    warning = `Showing lines ${startOffset + 1}-${returnedEnd} of ${totalLineCount}. Use offset=${returnedEnd} to read more.`;
+  }
+
+  return { content: numbered, lineCount: totalLineCount, warning };
 }

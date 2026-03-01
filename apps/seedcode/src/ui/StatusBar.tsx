@@ -1,46 +1,58 @@
 import React, { memo } from 'react';
 import { Box, Text } from 'ink';
+import type { Plan } from '../config/schema.js';
 
-interface StatusBarProps {
+// ── One-time banner (shown once via staticTurns) ──────────────────────────
+
+export interface BannerInfo {
   version: string;
   model: string;
   maskedKey: string;
-  /** 0–1 fraction of the 256k context window currently used (system + history) */
+  plan?: Plan;
+}
+
+/** Build a plain-text banner string for the initial staticTurn. */
+export function buildBannerText({ version, model, maskedKey, plan }: BannerInfo): string {
+  const parts = [`seedcode v${version}`, `model ${model}`];
+  if (plan) parts.push(`[${plan}]`);
+  parts.push(maskedKey);
+  return parts.join('  ');
+}
+
+// ── Live streaming indicator (step counter + context warnings) ────────────
+
+interface StreamingIndicatorProps {
+  /** 0–1 fraction of the 256k context window currently used */
   contextPct?: number;
   /** Current tool step number (1-based), null when idle */
   currentStep?: number | null;
   maxSteps?: number;
 }
 
-export const StatusBar = memo(function StatusBar({ version, model, maskedKey, contextPct, currentStep, maxSteps = 50 }: StatusBarProps) {
+export const StreamingIndicator = memo(function StreamingIndicator({
+  contextPct,
+  currentStep,
+  maxSteps = 50,
+}: StreamingIndicatorProps) {
   const showWarn = contextPct !== undefined && contextPct >= 0.75;
   const isCritical = contextPct !== undefined && contextPct >= 0.85;
+  const showStep = currentStep != null;
+
+  if (!showStep && !showWarn) return null;
 
   return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Box gap={2} paddingX={1}>
-        <Text bold color="cyan">seedcode</Text>
-        <Text dimColor>v{version}</Text>
-        <Box>
-          <Text dimColor> model </Text>
-          <Text color="cyan">{model}</Text>
-        </Box>
-        <Text dimColor>{maskedKey}</Text>
-        {currentStep != null && (
-          <Text color={currentStep >= maxSteps - 5 ? 'yellow' : 'dimColor'}>
-            step {currentStep}/{maxSteps}
-          </Text>
-        )}
-        {showWarn && (
-          <Text color={isCritical ? 'red' : 'yellow'}>
-            {isCritical ? '⚠ context critical' : '⚠ context high'}{' '}
-            {Math.round(contextPct * 100)}%
-          </Text>
-        )}
-      </Box>
-      <Box>
-        <Text dimColor>{'─'.repeat(60)}</Text>
-      </Box>
+    <Box paddingX={1} gap={2}>
+      {showStep && (
+        <Text color={currentStep! >= maxSteps - 5 ? 'yellow' : 'dimColor'}>
+          step {currentStep}/{maxSteps}
+        </Text>
+      )}
+      {showWarn && (
+        <Text color={isCritical ? 'red' : 'yellow'}>
+          {isCritical ? '⚠ context critical' : '⚠ context high'}{' '}
+          {Math.round(contextPct! * 100)}%
+        </Text>
+      )}
     </Box>
   );
 });

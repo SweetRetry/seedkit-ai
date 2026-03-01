@@ -1,6 +1,7 @@
+import { PLAN_PRESETS, type Plan } from '../config/schema.js';
 import type { Config } from '../config/schema.js';
 import type { PendingConfirm, PendingQuestion } from '../tools/index.js';
-import type { TodoItem } from '../tools/todo.js';
+import type { TaskItem } from '../tools/task.js';
 import type { ToolCallEntry } from './ToolCallView.js';
 import type { SessionEntry } from '../sessions/index.js';
 import type { SkillEntry } from '../context/index.js';
@@ -18,7 +19,7 @@ export interface AppState {
   activeReasoning: string | null;
   streaming: boolean;
   activeToolCalls: ToolCallEntry[];
-  activeTodos: TodoItem[];
+  activeTasks: TaskItem[];
   pendingConfirm: PendingConfirm | null;
   pendingQuestion: PendingQuestion | null;
   liveConfig: Config;
@@ -40,12 +41,14 @@ export type Action =
   | { type: 'STEP_FINISH' }
   | { type: 'STREAM_END' }
   | { type: 'STREAM_ERROR'; content: string }
+  | { type: 'PUSH_ACTIVE_TOOL_CALL'; entry: ToolCallEntry }
   | { type: 'FLUSH_TOOL_CALLS' }
   | { type: 'CONFIRM_TOOL'; approved: boolean }
   | { type: 'SET_PENDING_CONFIRM'; pending: PendingConfirm | null }
   | { type: 'SET_PENDING_QUESTION'; pending: PendingQuestion | null }
-  | { type: 'SET_ACTIVE_TODOS'; todos: TodoItem[] }
+  | { type: 'SET_ACTIVE_TASKS'; tasks: TaskItem[] }
   | { type: 'SET_MODEL'; model: string }
+  | { type: 'SET_PLAN'; plan: Plan }
   | { type: 'TOGGLE_THINKING' }
   | { type: 'ADD_TOKENS'; count: number }
   | { type: 'SET_TOTAL_TOKENS'; count: number }
@@ -65,7 +68,7 @@ export function replReducer(state: AppState, action: Action): AppState {
       return { ...state, staticTurns: action.turns };
 
     case 'STREAM_START':
-      return { ...state, streaming: true, activeTurn: '', activeToolCalls: [], activeTodos: [], currentStep: null };
+      return { ...state, streaming: true, activeTurn: '', activeToolCalls: [], activeTasks: [], currentStep: null };
 
     case 'STREAM_TICK':
       return { ...state, activeTurn: action.text };
@@ -95,12 +98,15 @@ export function replReducer(state: AppState, action: Action): AppState {
         activeTurn: null,
         activeReasoning: null,
         activeToolCalls: [],
-        activeTodos: [],
+        activeTasks: [],
         pendingConfirm: null,
         pendingQuestion: null,
         currentStep: null,
         staticTurns: [...state.staticTurns, { type: 'error', content: action.content }],
       };
+
+    case 'PUSH_ACTIVE_TOOL_CALL':
+      return { ...state, activeToolCalls: [...state.activeToolCalls, action.entry] };
 
     case 'FLUSH_TOOL_CALLS':
       return { ...state, activeToolCalls: [] };
@@ -124,11 +130,16 @@ export function replReducer(state: AppState, action: Action): AppState {
     case 'SET_PENDING_QUESTION':
       return { ...state, pendingQuestion: action.pending };
 
-    case 'SET_ACTIVE_TODOS':
-      return { ...state, activeTodos: action.todos };
+    case 'SET_ACTIVE_TASKS':
+      return { ...state, activeTasks: action.tasks };
 
     case 'SET_MODEL':
       return { ...state, liveConfig: { ...state.liveConfig, model: action.model } };
+
+    case 'SET_PLAN': {
+      const preset = PLAN_PRESETS[action.plan];
+      return { ...state, liveConfig: { ...state.liveConfig, plan: action.plan, model: preset.model } };
+    }
 
     case 'TOGGLE_THINKING':
       return { ...state, liveConfig: { ...state.liveConfig, thinking: !state.liveConfig.thinking } };
@@ -162,7 +173,7 @@ export function replReducer(state: AppState, action: Action): AppState {
         activeReasoning: null,
         streaming: false,
         activeToolCalls: [],
-        activeTodos: [],
+        activeTasks: [],
         pendingConfirm: null,
         pendingQuestion: null,
         totalTokens: 0,

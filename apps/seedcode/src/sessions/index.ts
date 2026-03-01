@@ -31,7 +31,7 @@ function sessionPath(cwd: string, sessionId: string): string {
 // ── Wire format ───────────────────────────────────────────────────────────────
 
 interface SessionRecord {
-  type: 'user' | 'assistant';
+  type: 'user' | 'assistant' | 'tool';
   sessionId: string;
   uuid: string;
   parentUuid: string | null;
@@ -126,7 +126,7 @@ export function saveSession(
   const records: SessionRecord[] = messages.map((message, i) => {
     const prev = existingByIdx.get(i);
     return {
-      type: message.role === 'user' ? 'user' : 'assistant',
+      type: message.role as 'user' | 'assistant' | 'tool',
       sessionId,
       uuid: prev?.uuid ?? randomUUID(),
       parentUuid: i === 0 ? null : (existingByIdx.get(i - 1)?.uuid ?? null),

@@ -1,3 +1,4 @@
+import { PLANS, type Plan } from '../config/schema.js';
 import type { Config } from '../config/schema.js';
 import type { SkillEntry } from '../context/index.js';
 import { listSessions, resolveSessionId } from '../sessions/index.js';
@@ -18,6 +19,7 @@ export type SlashCommandResult =
   | { type: 'model_change'; model: string }
   | { type: 'model_picker' }
   | { type: 'thinking_toggle' }
+  | { type: 'plan_change'; plan: Plan }
   | { type: 'compact' }
   | { type: 'resume'; sessionId: string }
   | { type: 'resume_picker' }
@@ -70,6 +72,17 @@ export function handleSlashCommand(
     case 'thinking':
       return { type: 'thinking_toggle' };
 
+    case 'plan': {
+      const planArg = args[0];
+      if (!planArg) {
+        return { type: 'handled', output: `Current plan: ${state.config.plan}  (${PLANS.join(' | ')})` };
+      }
+      if (!PLANS.includes(planArg as Plan)) {
+        return { type: 'handled', output: `Invalid plan "${planArg}". Must be one of: ${PLANS.join(', ')}` };
+      }
+      return { type: 'plan_change', plan: planArg as Plan };
+    }
+
     case 'skills':
       return { type: 'handled', output: buildSkillsList(state) };
 
@@ -107,6 +120,7 @@ export const SLASH_COMMANDS: Array<{ name: string; args?: string; desc: string }
   { name: 'sessions', desc: 'list past sessions for this directory' },
   { name: 'resume',   args: '<id>', desc: 'resume a past session' },
   { name: 'model',    args: '<id>', desc: 'switch model' },
+  { name: 'plan',     args: '<api|coding>', desc: 'switch API plan' },
   { name: 'thinking', desc: 'toggle extended thinking' },
   { name: 'skills',   desc: 'list skills · /skills:<name> to activate' },
   { name: 'compact',  desc: 'summarise history' },
@@ -132,6 +146,7 @@ function buildStatus(state: SessionState): string {
     'Session Status:',
     `  Version:        ${version}`,
     `  Session ID:     ${sessionId.slice(0, 8)}`,
+    `  Plan:           ${config.plan}`,
     `  Model:          ${config.model}`,
     `  API Key:        ${maskedKey}`,
     `  Thinking:       ${config.thinking ? 'on' : 'off'}`,

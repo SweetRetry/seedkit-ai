@@ -1,18 +1,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ConfigSchema, DEFAULT_MODEL, type Config } from './schema.js';
+import { ConfigSchema, DEFAULT_MODEL, type Config, type Plan } from './schema.js';
 
 export interface CliFlags {
   model?: string;
   apiKey?: string;
   thinking?: boolean;
+  plan?: Plan;
 }
 
 const CONFIG_DIR = path.join(os.homedir(), '.seedcode');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
-type StoredConfig = Partial<Pick<Config, 'apiKey' | 'model' | 'thinking'>>;
+type StoredConfig = Partial<Pick<Config, 'apiKey' | 'model' | 'thinking' | 'plan'>>;
 
 function read(): StoredConfig {
   try {
@@ -35,6 +36,7 @@ export function loadConfig(flags: CliFlags = {}): Config {
     apiKey: apiKey ?? undefined,
     model: flags.model ?? stored.model ?? DEFAULT_MODEL,
     thinking: flags.thinking ?? stored.thinking ?? false,
+    plan: flags.plan ?? stored.plan ?? 'api',
   });
 }
 

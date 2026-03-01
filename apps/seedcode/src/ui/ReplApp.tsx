@@ -1,10 +1,11 @@
 import React, { useReducer, useCallback, useRef, useEffect } from 'react';
 import { Box } from 'ink';
 import type { ModelMessage } from 'ai';
+import { PLAN_PRESETS } from '../config/schema.js';
 import type { Config } from '../config/schema.js';
 import type { SkillEntry } from '../context/index.js';
 import { handleSlashCommand, type SessionState } from '../commands/slash.js';
-import { createTodoStore } from '../tools/index.js';
+import { createTaskStore } from '../tools/index.js';
 import { resolveMentions } from '../context/mentions.js';
 import { createSession, loadSession, listSessions, type SessionEntry } from '../sessions/index.js';
 import { clearMediaStore } from '../media-store.js';
@@ -14,10 +15,10 @@ import { ResumePicker } from './pickers/ResumePicker.js';
 import { MemoryPicker } from './pickers/MemoryPicker.js';
 import { QuestionPrompt } from './QuestionPrompt.js';
 import { MessageList } from './MessageList.js';
-import { StatusBar } from './StatusBar.js';
+import { StreamingIndicator, buildBannerText } from './StatusBar.js';
 import { ActiveToolCallsView } from './ActiveToolCallsView.js';
 import { ConfirmPrompt } from './ConfirmPrompt.js';
-import { TodoListView } from './TodoListView.js';
+import { TaskListView } from './TaskListView.js';
 import { replReducer, type AppState } from './replReducer.js';
 import { useAgentContext } from './hooks/useAgentContext.js';
 import { useAgentStream, estimateContextPct } from './hooks/useAgentStream.js';
@@ -35,7 +36,7 @@ export interface SavedReplState {
 interface ReplAppProps {
   config: Config;
   version: string;
-  seed: ReturnType<typeof import('@seedkit-ai/ai-sdk-provider').createSeed>;
+  apiKey: string;
   onExit: () => void;
   onOpenEditor: (filePath: string, saved: SavedReplState) => void;
   skipConfirm?: boolean;
@@ -49,7 +50,7 @@ const INITIAL_STATE = (initialConfig: Config, initialSkills: SkillEntry[]): AppS
   activeReasoning: null,
   streaming: false,
   activeToolCalls: [],
-  activeTodos: [],
+  activeTasks: [],
   pendingConfirm: null,
   pendingQuestion: null,
   liveConfig: initialConfig,
@@ -61,13 +62,22 @@ const INITIAL_STATE = (initialConfig: Config, initialSkills: SkillEntry[]): AppS
   currentStep: null,
 });
 
-export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEditor, skipConfirm = false, initialSkills = [], savedState }: ReplAppProps) {
+export function ReplApp({ config: initialConfig, version, apiKey, onExit, onOpenEditor, skipConfirm = false, initialSkills = [], savedState }: ReplAppProps) {
   const cwd = process.cwd();
 
   const [state, dispatch] = useReducer(replReducer, undefined, () => {
     const base = INITIAL_STATE(initialConfig, initialSkills);
-    if (!savedState) return base;
-    return { ...base, staticTurns: savedState.staticTurns, totalTokens: savedState.totalTokens };
+    if (savedState) {
+      return { ...base, staticTurns: savedState.staticTurns, totalTokens: savedState.totalTokens };
+    }
+    // Show banner once at startup
+    const banner = buildBannerText({
+      version,
+      model: initialConfig.model,
+      maskedKey: initialConfig.apiKey ? initialConfig.apiKey.slice(0, 6) + '...' + initialConfig.apiKey.slice(-4) : '✗',
+      plan: initialConfig.plan,
+    });
+    return { ...base, staticTurns: [{ type: 'info' as const, content: banner }] };
   });
 
   // Single ref that always reflects current state — used by stable callbacks
@@ -76,7 +86,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
 
   const context = useAgentContext({ cwd, dispatch });
 
-  const stream = useAgentStream({ cwd, skipConfirm, seed, dispatch, stateRef, context });
+  const stream = useAgentStream({ cwd, skipConfirm, apiKey, dispatch, stateRef, context });
 
   // Restore conversation state after returning from editor
   useEffect(() => {
@@ -84,7 +94,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
     stream.messages.current = savedState.messages;
     stream.turnCount.current = savedState.turnCount;
     context.sessionIdRef.current = savedState.sessionId;
-    stream.todoStore.current = createTodoStore(cwd, savedState.sessionId);
+    stream.taskStore.current = createTaskStore(cwd, savedState.sessionId);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Session management ─────────────────────────────────────────────────
@@ -100,7 +110,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
     stream.messages.current = loaded;
     stream.turnCount.current = loaded.filter((m) => m.role === 'user').length;
     context.sessionIdRef.current = sessionId;
-    stream.todoStore.current = createTodoStore(cwd, sessionId);
+    stream.taskStore.current = createTaskStore(cwd, sessionId);
 
     const turns = loaded.flatMap((m): import('./replReducer.js').TurnEntry[] => {
       if (m.role === 'user') {
@@ -149,7 +159,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
 
   // ── Input / slash command handler ──────────────────────────────────────
 
-  const handleSubmit = useCallback((input: string) => {
+  const handleSubmit = useCallback((input: string, displayValue?: string) => {
     if (stream.inFlight.current) return;
 
     const { liveConfig, totalTokens } = stateRef.current;
@@ -174,7 +184,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
       const newSessionId = createSession(cwd);
       context.sessionIdRef.current = newSessionId;
       clearMediaStore();
-      stream.todoStore.current = createTodoStore(cwd, newSessionId);
+      stream.taskStore.current = createTaskStore(cwd, newSessionId);
       dispatch({ type: 'CLEAR' });
       context.loadContext();
       dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: '✓ Conversation cleared. Context reloaded.' } });
@@ -201,6 +211,11 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
     if (cmdResult.type === 'thinking_toggle') {
       dispatch({ type: 'TOGGLE_THINKING' });
       dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: `✓ Thinking mode: ${!liveConfig.thinking ? 'on' : 'off'}` } });
+      return;
+    }
+    if (cmdResult.type === 'plan_change') {
+      dispatch({ type: 'SET_PLAN', plan: cmdResult.plan });
+      dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: `✓ Plan: ${cmdResult.plan} (model → ${PLAN_PRESETS[cmdResult.plan].model})` } });
       return;
     }
 
@@ -236,7 +251,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
     } else {
       stream.messages.current.push({ role: 'user', content: input });
     }
-    dispatch({ type: 'PUSH_STATIC', entry: { type: 'user', content: input } });
+    dispatch({ type: 'PUSH_STATIC', entry: { type: 'user', content: displayValue ?? input } });
     stream.turnCount.current++;
     dispatch({ type: 'STREAM_START' });
 
@@ -312,16 +327,12 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
 
   const {
     staticTurns, activeTurn, activeReasoning, streaming,
-    activeToolCalls, activeTodos, pendingConfirm, pendingQuestion,
+    activeToolCalls, activeTasks, pendingConfirm, pendingQuestion,
     liveConfig, waitingForModel, availableSkills, resumeSessions, memoryPicker,
     currentStep,
   } = state;
 
-  const maskedKey = liveConfig.apiKey
-    ? liveConfig.apiKey.slice(0, 6) + '...' + liveConfig.apiKey.slice(-4)
-    : '✗';
-
-  const contextPct = estimateContextPct(context.systemPromptRef.current, stream.messages.current);
+  const contextPct = streaming ? estimateContextPct(context.systemPromptRef.current, stream.messages.current) : undefined;
 
   const activeTurnEntry =
     activeTurn !== null ? ({ type: 'assistant', content: activeTurn, done: false } as const) : null;
@@ -332,7 +343,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
 
   return (
     <Box flexDirection="column">
-      <StatusBar version={version} model={liveConfig.model} maskedKey={maskedKey} contextPct={contextPct} currentStep={currentStep} />
+      {streaming && <StreamingIndicator contextPct={contextPct} currentStep={currentStep} />}
 
       <MessageList
         staticTurns={staticTurns}
@@ -341,7 +352,7 @@ export function ReplApp({ config: initialConfig, version, seed, onExit, onOpenEd
         isThinking={isThinking}
       />
 
-      <TodoListView todos={activeTodos} />
+      <TaskListView tasks={activeTasks} />
 
       <ActiveToolCallsView calls={activeToolCalls} onConfirm={handleConfirm} />
 

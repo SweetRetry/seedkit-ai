@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { loadConfig } from './config/index.js';
+import { PLANS, type Plan } from './config/schema.js';
 import { startRepl } from './repl.js';
 
 const VERSION = '0.0.1';
@@ -12,6 +13,7 @@ const program = new Command()
   .option('-m, --model <id>', 'Model to use', 'doubao-seed-1-8-251228')
   .option('-k, --api-key <key>', 'API key (overrides ARK_API_KEY env var)')
   .option('--thinking', 'Enable extended thinking mode')
+  .option('--plan <plan>', 'API plan: api (default) or coding', 'api')
   .option(
     '--dangerously-skip-permissions',
     'Skip all tool confirmation prompts (CI use only, blocked when stdin is TTY)'
@@ -24,6 +26,7 @@ Slash commands (in session):
   /status               Show current session status
   /clear                Clear conversation history
   /model <id>           Switch model mid-session
+  /plan <api|coding>    Switch API plan mid-session
   /thinking             Toggle thinking mode on/off
   /exit, /quit          End the session
   `
@@ -35,6 +38,7 @@ async function main(): Promise<void> {
     model: string;
     apiKey?: string;
     thinking?: boolean;
+    plan?: string;
     dangerouslySkipPermissions?: boolean;
   }>();
 
@@ -47,10 +51,17 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const plan = opts.plan as Plan | undefined;
+  if (plan && !PLANS.includes(plan)) {
+    process.stderr.write(`Error: invalid plan "${plan}". Must be one of: ${PLANS.join(', ')}\n`);
+    process.exit(1);
+  }
+
   const config = loadConfig({
     model: opts.model,
     apiKey: opts.apiKey,
     thinking: opts.thinking,
+    plan,
   });
 
   await startRepl(config, VERSION, {

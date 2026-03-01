@@ -98,10 +98,14 @@ function TurnView({ turn }: { turn: TurnEntry }) {
   switch (turn.type) {
     case 'user':
       return (
-        <Box marginTop={1} paddingX={1} gap={1}>
-          <Text color="cyan" bold>▸</Text>
-          <Text color="cyan" bold>you</Text>
-          <Text>{turn.content}</Text>
+        <Box marginTop={1} paddingX={1} flexDirection="column">
+          <Box gap={1}>
+            <Text color="cyan" bold>▸</Text>
+            <Text color="cyan" bold>you</Text>
+          </Box>
+          <Box marginLeft={3}>
+            <Text wrap="wrap">{turn.content}</Text>
+          </Box>
         </Box>
       );
 
@@ -123,7 +127,7 @@ function TurnView({ turn }: { turn: TurnEntry }) {
       return (
         <Box marginTop={1} paddingX={1} gap={1}>
           <Text color="red">✕</Text>
-          <Text color="red">{turn.content}</Text>
+          <Text color="red" wrap="wrap">{turn.content}</Text>
         </Box>
       );
 

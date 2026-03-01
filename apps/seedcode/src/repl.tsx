@@ -3,7 +3,6 @@ import { render } from 'ink';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createSeed } from '@seedkit-ai/ai-sdk-provider';
 import type { Config } from './config/schema.js';
 import { buildContext, type SkillEntry } from './context/index.js';
 import { ReplApp, type SavedReplState } from './ui/ReplApp.js';
@@ -42,13 +41,12 @@ function App({
   }
 
   const resolvedConfig: Config = { ...config, apiKey };
-  const seed = createSeed({ apiKey });
 
   return (
     <ReplApp
       config={resolvedConfig}
       version={version}
-      seed={seed}
+      apiKey={apiKey}
       onExit={onExit}
       onOpenEditor={onOpenEditor}
       skipConfirm={skipConfirm}

@@ -8,9 +8,13 @@ export interface GrepMatch {
   content: string;
 }
 
+const MAX_MATCHES = 200;
+
 export interface GrepResult {
   matches: GrepMatch[];
   count: number;
+  totalCount: number;
+  truncated: boolean;
 }
 
 export async function grepFiles(
@@ -57,5 +61,12 @@ export async function grepFiles(
     }
   }
 
-  return { matches, count: matches.length };
+  const totalCount = matches.length;
+  const truncated = totalCount > MAX_MATCHES;
+  return {
+    matches: truncated ? matches.slice(0, MAX_MATCHES) : matches,
+    count: Math.min(totalCount, MAX_MATCHES),
+    totalCount,
+    truncated,
+  };
 }

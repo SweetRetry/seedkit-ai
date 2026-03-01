@@ -4,16 +4,43 @@ import {
   deleteLeftOfCursor,
   normalizeLineEndings,
   insertAtCursor,
+  isPaste,
   prevWordBoundary,
   nextWordBoundary,
   getCursorLineCol,
   computeMultilineViewport,
   computeSingleLineViewport,
+  makePasteMarker,
+  expandPasteMarkers,
+  replaceMarkersForDisplay,
+  mapCursorToDisplay,
+  cursorSkipMarker,
+  PASTE_MARKER_RE,
 } from './inputEditing.js';
 import { SLASH_COMMANDS } from '../commands/slash.js';
 import { searchTrackedFiles } from '../tools/glob.js';
 
 const HISTORY_MAX = 100;
+const PASTE_LINE_THRESHOLD = 3; // pastes with >3 newlines (4+ lines) get collapsed
+const PASTE_COALESCE_MS = 16;   // time window to coalesce chunked terminal paste
+
+interface PastedBlock {
+  id: number;
+  content: string;
+  lineCount: number;
+}
+
+/**
+ * Pending paste accumulator — collects rapid-fire useInput chunks that
+ * belong to a single terminal paste operation.  After PASTE_COALESCE_MS
+ * of silence the accumulated text is evaluated: if it exceeds the line
+ * threshold it gets collapsed into a marker; otherwise it stays inline.
+ */
+interface PendingPaste {
+  insertStart: number; // cursor position *before* the first chunk was inserted
+  totalLen: number;    // total characters inserted so far
+  timer: ReturnType<typeof setTimeout>;
+}
 
 const EMPTY_SKILLS: Array<{ name: string; scope: 'global' | 'project' }> = [];
 
@@ -55,7 +82,7 @@ interface InputBoxProps {
   availableSkills?: Array<{ name: string; scope: 'global' | 'project' }>;
   /** Working directory used for @mention file glob suggestions */
   cwd?: string;
-  onSubmit: (value: string) => void;
+  onSubmit: (value: string, displayValue?: string) => void;
   onInterrupt: () => void;
   onConfirm?: (approved: boolean) => void;
   onPasteImage?: () => { mediaId: string; byteSize: number } | null;
@@ -84,6 +111,14 @@ export function InputBox({
   const [imageSelectIdx, setImageSelectIdx] = useState(-1);
   const imageSelectIdxRef = useRef(-1);
   imageSelectIdxRef.current = imageSelectIdx;
+  const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
+  const pastedBlocksRef = useRef(pastedBlocks);
+  pastedBlocksRef.current = pastedBlocks;
+  const pasteCounterRef = useRef(0);
+  const pendingPasteRef = useRef<PendingPaste | null>(null);
+  // Render-visible snapshot of pendingPaste so viewport can suppress pending region
+  const [pendingPasteSnap, setPendingPasteSnap] = useState<{ insertStart: number; totalLen: number } | null>(null);
+
   const [fileSuggestions, setFileSuggestions] = useState<Suggestion[] | null>(null);
   const fileSuggestionsRef = useRef<Suggestion[] | null>(null);
   fileSuggestionsRef.current = fileSuggestions;
@@ -100,10 +135,16 @@ export function InputBox({
   const draftRef = useRef('');
   const lastHistoryNavRef = useRef(0);
 
+  // Cleanup pending paste timer on unmount
+  useEffect(() => () => {
+    if (pendingPasteRef.current) clearTimeout(pendingPasteRef.current.timer);
+  }, []);
+
   const slashSuggestions = useMemo(() => getSuggestions(value, availableSkills), [value, availableSkills]);
 
   const termCols = stdout?.columns ?? 80;
-  const viewportWidth = Math.max(10, termCols - 3);
+  // Account for border (2) + paddingLeft (1) + paddingRight (1) + prompt "› " (2)
+  const viewportWidth = Math.max(10, termCols - 6);
 
   // Auto-convert pasted image file paths
   useEffect(() => {
@@ -159,7 +200,50 @@ export function InputBox({
     setCursor(newCursor);
   };
 
+  /**
+   * Called when the paste coalesce timer fires — checks if the accumulated
+   * paste text is long enough to collapse into a marker.
+   */
+  const finalizePaste = () => {
+    const pp = pendingPasteRef.current;
+    if (!pp) return;
+    pendingPasteRef.current = null;
+    setPendingPasteSnap(null);
+
+    const val = valueRef.current;
+    const cur = cursorRef.current;
+    const pastedText = val.slice(pp.insertStart, pp.insertStart + pp.totalLen);
+    const nlCount = (pastedText.match(/\n/g) ?? []).length;
+
+    if (nlCount > PASTE_LINE_THRESHOLD) {
+      const id = ++pasteCounterRef.current;
+      const lineCount = nlCount + 1;
+      const block: PastedBlock = { id, content: pastedText, lineCount };
+      setPastedBlocks((prev) => [...prev, block]);
+      pastedBlocksRef.current = [...pastedBlocksRef.current, block];
+
+      const marker = makePasteMarker(id);
+      const newVal = val.slice(0, pp.insertStart) + marker + val.slice(pp.insertStart + pp.totalLen);
+      // Adjust cursor: if cursor was within or after the pasted region, remap
+      let newCur: number;
+      if (cur >= pp.insertStart + pp.totalLen) {
+        newCur = cur - pp.totalLen + marker.length;
+      } else if (cur > pp.insertStart) {
+        newCur = pp.insertStart + marker.length;
+      } else {
+        newCur = cur;
+      }
+      update(newVal, newCur);
+    }
+    // If not long enough, text stays inline as-is — nothing to do.
+  };
+
   const reset = () => {
+    if (pendingPasteRef.current) {
+      clearTimeout(pendingPasteRef.current.timer);
+      pendingPasteRef.current = null;
+    }
+    setPendingPasteSnap(null);
     update('', 0);
     historyIdxRef.current = -1;
     draftRef.current = '';
@@ -168,6 +252,9 @@ export function InputBox({
     imageCounterRef.current = 0;
     setImageSelectIdx(-1);
     imageSelectIdxRef.current = -1;
+    setPastedBlocks([]);
+    pastedBlocksRef.current = [];
+    pasteCounterRef.current = 0;
   };
 
   useInput(
@@ -312,12 +399,40 @@ export function InputBox({
           update(newVal, newVal.length);
           return;
         }
-        const trimmed = val.trim();
+
+        // Flush any pending paste coalesce before submit
+        let submitSrc = val;
+        let allBlocks = [...pastedBlocksRef.current];
+        const pp = pendingPasteRef.current;
+        if (pp) {
+          clearTimeout(pp.timer);
+          pendingPasteRef.current = null;
+          const pastedText = val.slice(pp.insertStart, pp.insertStart + pp.totalLen);
+          const nlCount = (pastedText.match(/\n/g) ?? []).length;
+          if (nlCount > PASTE_LINE_THRESHOLD) {
+            const id = ++pasteCounterRef.current;
+            const lineCount = nlCount + 1;
+            allBlocks.push({ id, content: pastedText, lineCount });
+            const marker = makePasteMarker(id);
+            submitSrc = val.slice(0, pp.insertStart) + marker + val.slice(pp.insertStart + pp.totalLen);
+          }
+        }
+
+        // Expand paste markers to full content before submitting
+        let submitVal = submitSrc;
+        if (allBlocks.length > 0) {
+          const blocksMap = new Map(allBlocks.map((b) => [b.id, b.content]));
+          submitVal = expandPasteMarkers(submitSrc, blocksMap);
+        }
+        const trimmed = submitVal.trim();
+        // Build display version with placeholders for PUSH_STATIC
+        const displayBlocksMap = new Map(allBlocks.map((b) => [b.id, { lineCount: b.lineCount }]));
+        const displayVal = allBlocks.length > 0 ? replaceMarkersForDisplay(submitSrc, displayBlocksMap).trim() : trimmed;
         reset();
         if (trimmed) {
           if (historyRef.current[0] !== trimmed)
             historyRef.current = [trimmed, ...historyRef.current].slice(0, HISTORY_MAX);
-          onSubmit(trimmed);
+          onSubmit(trimmed, displayVal !== trimmed ? displayVal : undefined);
         }
         return;
       }
@@ -382,13 +497,15 @@ export function InputBox({
       }
 
       if (key.leftArrow) {
-        if (cur > 0 && val[cur - 1] === '\n') { update(val, cur - 1); }
-        else { update(val, Math.max(0, cur - 1)); }
+        let newCur = cur > 0 && val[cur - 1] === '\n' ? cur - 1 : Math.max(0, cur - 1);
+        newCur = cursorSkipMarker(val, newCur, 'left');
+        update(val, newCur);
         return;
       }
       if (key.rightArrow) {
-        if (cur < val.length && val[cur] === '\n') { update(val, cur + 1); }
-        else { update(val, Math.min(val.length, cur + 1)); }
+        let newCur = cur < val.length && val[cur] === '\n' ? cur + 1 : Math.min(val.length, cur + 1);
+        newCur = cursorSkipMarker(val, newCur, 'right');
+        update(val, newCur);
         return;
       }
       if ((key.meta && key.leftArrow) || (key.ctrl && input === 'b')) { update(val, prevWordBoundary(val, cur)); return; }
@@ -416,11 +533,23 @@ export function InputBox({
       }
 
       if (key.backspace || (key.delete && input === '\x7f')) {
-        const next = deleteLeftOfCursor(val, cur); update(next.value, next.cursor);
+        const next = deleteLeftOfCursor(val, cur);
+        if (next.deletedMarkerId != null) {
+          setPastedBlocks((prev) => prev.filter((b) => b.id !== next.deletedMarkerId));
+          pastedBlocksRef.current = pastedBlocksRef.current.filter((b) => b.id !== next.deletedMarkerId);
+        }
+        update(next.value, next.cursor);
         return;
       }
       if (key.delete && input === '') {
-        const next = deleteLeftOfCursor(val, cur); update(next.value, next.cursor);
+        // Some terminals report Backspace as key.delete + empty input
+        // (not key.backspace), so this must also delete LEFT, not right.
+        const next = deleteLeftOfCursor(val, cur);
+        if (next.deletedMarkerId != null) {
+          setPastedBlocks((prev) => prev.filter((b) => b.id !== next.deletedMarkerId));
+          pastedBlocksRef.current = pastedBlocksRef.current.filter((b) => b.id !== next.deletedMarkerId);
+        }
+        update(next.value, next.cursor);
         return;
       }
 
@@ -429,25 +558,88 @@ export function InputBox({
       if (input) {
         if (historyIdxRef.current !== -1) { historyIdxRef.current = -1; draftRef.current = ''; }
         setSuggestionIdx(0);
+
+        // Always insert text immediately for responsive feel
         const inserted = insertAtCursor(val, cur, input);
         update(inserted.value, inserted.cursor);
+
+        // Accumulate paste chunks — terminal may split a single paste across
+        // multiple useInput calls delivered within a few milliseconds.
+        if (isPaste(input)) {
+          const pp = pendingPasteRef.current;
+          if (pp) {
+            // Extend existing pending paste
+            clearTimeout(pp.timer);
+            pp.totalLen += input.length;
+            pp.timer = setTimeout(finalizePaste, PASTE_COALESCE_MS);
+          } else {
+            // Start new pending paste
+            pendingPasteRef.current = {
+              insertStart: cur,
+              totalLen: input.length,
+              timer: setTimeout(finalizePaste, PASTE_COALESCE_MS),
+            };
+          }
+          // Update render-visible snapshot so viewport can hide the pending region
+          const snap = pendingPasteRef.current!;
+          setPendingPasteSnap({ insertStart: snap.insertStart, totalLen: snap.totalLen });
+        }
       }
     },
     { isActive: true }
   );
 
   // ── Pre-compute viewport (must run before any early return to satisfy hooks rules) ──
-  const isMultiline = value.includes('\n');
+
+  // Build display-info map for paste blocks (finalized)
+  const pasteDisplayMap = useMemo(() => {
+    if (pastedBlocks.length === 0) return undefined;
+    return new Map(pastedBlocks.map((b) => [b.id, { lineCount: b.lineCount }]));
+  }, [pastedBlocks]);
+
+  // Build a display-ready value with all markers (finalized + pending)
+  // replaced by human-readable text, and cursor mapped to display coordinates.
+  // This ensures viewport rendering and cursor position are always in sync.
+  const { displayValue, displayCursor } = useMemo(() => {
+    let dv = value;
+    let dc = cursor;
+
+    // 1) Replace pending paste region with temporary placeholder
+    if (pendingPasteSnap) {
+      const { insertStart, totalLen } = pendingPasteSnap;
+      const pastedText = dv.slice(insertStart, insertStart + totalLen);
+      const nlCount = (pastedText.match(/\n/g) ?? []).length;
+      if (nlCount > PASTE_LINE_THRESHOLD) {
+        const placeholder = `[Pasting… +${nlCount + 1} lines]`;
+        dv = dv.slice(0, insertStart) + placeholder + dv.slice(insertStart + totalLen);
+        if (dc >= insertStart + totalLen) {
+          dc = dc - totalLen + placeholder.length;
+        } else if (dc > insertStart) {
+          dc = insertStart + placeholder.length;
+        }
+      }
+    }
+
+    // 2) Replace finalized paste markers with display text
+    if (pasteDisplayMap && pasteDisplayMap.size > 0) {
+      dc = mapCursorToDisplay(dv, dc, pasteDisplayMap);
+      dv = replaceMarkersForDisplay(dv, pasteDisplayMap);
+    }
+
+    return { displayValue: dv, displayCursor: dc };
+  }, [value, cursor, pendingPasteSnap, pasteDisplayMap]);
+
+  const isMultiline = displayValue.includes('\n');
   const MAX_VISIBLE_LINES = 10;
 
   const { visibleLines, totalLines } = useMemo(
-    () => computeMultilineViewport(value, cursor, viewportWidth, MAX_VISIBLE_LINES),
-    [value, cursor, viewportWidth],
+    () => computeMultilineViewport(displayValue, displayCursor, viewportWidth, MAX_VISIBLE_LINES),
+    [displayValue, displayCursor, viewportWidth],
   );
 
   const singleLineView = useMemo(
-    () => isMultiline ? { before: '', atCursor: '', after: '' } : computeSingleLineViewport(value, cursor, viewportWidth),
-    [value, cursor, viewportWidth, isMultiline],
+    () => isMultiline ? { before: '', atCursor: '', after: '' } : computeSingleLineViewport(displayValue, displayCursor, viewportWidth),
+    [displayValue, displayCursor, viewportWidth, isMultiline],
   );
 
   // ── Render ──────────────────────────────────────────────────────────────
@@ -506,46 +698,53 @@ export function InputBox({
           )}
         </Box>
       )}
-      {isImageSelectMode
-        ? (
-          <Box>
-            <Text dimColor>{'› '}</Text>
-            <Text dimColor>{value || '(type a message)'}</Text>
-          </Box>
-        )
-        : isMultiline
+      <Box borderStyle="round" borderColor="gray" paddingLeft={1} paddingRight={1}>
+        {isImageSelectMode
           ? (
-            <Box flexDirection="column">
-              {totalLines > MAX_VISIBLE_LINES && visibleLines[0]?.origIdx > 0 && (
-                <Box marginLeft={2}>
-                  <Text dimColor>{`  ↑ ${visibleLines[0].origIdx} more line${visibleLines[0].origIdx > 1 ? 's' : ''}`}</Text>
-                </Box>
-              )}
-              {visibleLines.map((rl, i) => (
-                <Box key={i}>
-                  <Text color="cyan" bold>{rl.isFirst ? '› ' : '… '}</Text>
-                  {rl.hasCursor
-                    ? <><Text>{rl.before}</Text><Text inverse>{rl.atCursor}</Text><Text>{rl.after}</Text></>
-                    : <Text>{rl.text}</Text>
-                  }
-                </Box>
-              ))}
-              {totalLines > MAX_VISIBLE_LINES && (
-                <Box marginLeft={2}>
-                  <Text dimColor>{`  ${totalLines} lines total · \\ to add newline`}</Text>
-                </Box>
-              )}
-            </Box>
-          )
-          : (
             <Box>
-              <Text color="cyan" bold>{'› '}</Text>
-              <Text>{singleLineView.before}</Text>
-              <Text inverse>{singleLineView.atCursor}</Text>
-              <Text>{singleLineView.after}</Text>
+              <Text dimColor>{'› '}</Text>
+              <Text dimColor>{value || '(type a message)'}</Text>
             </Box>
           )
-      }
+          : isMultiline
+            ? (
+              <Box flexDirection="column">
+                {totalLines > MAX_VISIBLE_LINES && visibleLines[0]?.origIdx > 0 && (
+                  <Box>
+                    <Text dimColor>{`  ↑ ${visibleLines[0].origIdx} more line${visibleLines[0].origIdx > 1 ? 's' : ''}`}</Text>
+                  </Box>
+                )}
+                {visibleLines.map((rl, i) => {
+                  const isPasteDisplay = /^\[Pasted text #\d+ \+\d+ lines\]$/.test(rl.text) || /^\[Pasting… \+\d+ lines\]$/.test(rl.text);
+                  return (
+                    <Box key={i}>
+                      <Text color="cyan" bold>{rl.isFirst ? '› ' : '… '}</Text>
+                      {rl.hasCursor
+                        ? <><Text>{rl.before}</Text><Text inverse>{rl.atCursor}</Text><Text>{rl.after}</Text></>
+                        : isPasteDisplay
+                          ? <Text dimColor>{rl.text}</Text>
+                          : <Text>{rl.text}</Text>
+                      }
+                    </Box>
+                  );
+                })}
+                {totalLines > MAX_VISIBLE_LINES && (
+                  <Box>
+                    <Text dimColor>{`  ${totalLines} lines total · \\ to add newline`}</Text>
+                  </Box>
+                )}
+              </Box>
+            )
+            : (
+              <Box>
+                <Text color="cyan" bold>{'› '}</Text>
+                <Text>{singleLineView.before}</Text>
+                <Text inverse>{singleLineView.atCursor}</Text>
+                <Text>{singleLineView.after}</Text>
+              </Box>
+            )
+        }
+      </Box>
       {suggestions && (
         <Box flexDirection="column" marginLeft={2}>
           {suggestions.map((s, i) => {

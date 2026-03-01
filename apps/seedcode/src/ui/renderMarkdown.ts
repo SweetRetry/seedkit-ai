@@ -1,24 +1,14 @@
-import { marked } from 'marked';
-import { markedTerminal } from 'marked-terminal';
-
-// Configure marked with terminal renderer once at module load
-marked.use(
-  markedTerminal({
-    // Keep code blocks readable at typical terminal widths
-    width: process.stdout.columns || 80,
-    // Reflect actual terminal capability for colours
-    reflowText: false,
-  })
-);
+import { render } from 'markdansi';
 
 /**
  * Render a Markdown string to ANSI-coloured terminal text.
+ * Uses markdansi — zero-dependency GFM renderer with proper nested lists,
+ * code block highlighting, tables, and link support.
  * Falls back to the raw string if parsing throws.
  */
 export function renderMarkdown(text: string): string {
   try {
-    // marked.parse returns string when not in async mode
-    return marked.parse(text) as string;
+    return render(text, { width: process.stdout.columns || 80 });
   } catch {
     return text;
   }
