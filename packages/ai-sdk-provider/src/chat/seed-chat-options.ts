@@ -2,11 +2,11 @@ import { lazySchema, zodSchema } from '@ai-sdk/provider-utils';
 import { z } from 'zod';
 
 export type SeedModelId =
+  | 'doubao-seed-2-0-pro-260215'
+  | 'doubao-seed-2-0-lite-260215'
+  | 'doubao-seed-2-0-mini-260215'
+  | 'doubao-seed-2-0-code-preview-260215'
   | 'doubao-seed-1-8-251228'
-  | 'doubao-seed-code-preview-251028'
-  | 'doubao-seed-1-6-lite-251015'
-  | 'doubao-seed-1-6-flash-250828'
-  | 'doubao-seed-1-6-vision-250815'
   | (string & {});
 
 const seedChatOptionsSchema = z.object({

@@ -7,14 +7,6 @@ export type SeedResponsesModelId =
   | 'doubao-seed-2-0-mini-260215'
   | 'doubao-seed-2-0-code-preview-260215'
   | 'doubao-seed-1-8-251228'
-  | 'doubao-seed-code-preview-251028'
-  | 'doubao-seed-1-6-vision-250815'
-  | 'doubao-seed-1-6-251015'
-  | 'doubao-seed-1-6-lite-251015'
-  | 'doubao-seed-1-6-flash-250828'
-  | 'doubao-seed-1-6-flash-250715'
-  | 'doubao-seed-1-6-flash-250615'
-  | 'doubao-seed-1-6-250615'
   | (string & {});
 
 const seedResponsesOptionsSchema = z.object({
