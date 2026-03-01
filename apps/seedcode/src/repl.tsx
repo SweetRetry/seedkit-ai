@@ -6,6 +6,8 @@ import path from 'node:path';
 import type { Config } from './config/schema.js';
 import { buildContext, type SkillEntry } from './context/index.js';
 import { loadSession } from './sessions/index.js';
+import { loadMcpConfig } from './mcp/config.js';
+import { McpManager } from './mcp/manager.js';
 import { ReplApp, type SavedReplState } from './ui/ReplApp.js';
 import { SetupWizard } from './ui/SetupWizard.js';
 
@@ -20,6 +22,7 @@ function App({
   skipConfirm,
   initialSkills,
   savedState,
+  mcpManager,
   onExit,
   onOpenEditor,
 }: {
@@ -28,6 +31,7 @@ function App({
   skipConfirm: boolean;
   initialSkills: SkillEntry[];
   savedState?: SavedReplState;
+  mcpManager?: McpManager;
   onExit: () => void;
   onOpenEditor: (filePath: string, saved: SavedReplState) => void;
 }) {
@@ -54,6 +58,7 @@ function App({
       skipConfirm={skipConfirm}
       initialSkills={initialSkills}
       savedState={savedState}
+      mcpManager={mcpManager}
     />
   );
 }
@@ -65,6 +70,14 @@ export async function startRepl(
 ): Promise<void> {
   const cwd = process.cwd();
   const { skills: initialSkills } = buildContext(cwd);
+
+  // Initialize MCP connections (parallel, failures are silent)
+  const mcpConfig = loadMcpConfig(cwd);
+  let mcpManager: McpManager | undefined;
+  if (mcpConfig.servers.length > 0) {
+    mcpManager = new McpManager();
+    await mcpManager.connectAll(mcpConfig.servers);
+  }
 
   // Build initial savedState from --resume if provided
   let initialSavedState: SavedReplState | undefined;
@@ -93,6 +106,7 @@ export async function startRepl(
           skipConfirm={opts.skipConfirm ?? false}
           initialSkills={initialSkills}
           savedState={savedState}
+          mcpManager={mcpManager}
           onExit={() => {
             unmount();
             resolve();
@@ -109,21 +123,25 @@ export async function startRepl(
 
   // Loop: re-mount after returning from editor
   let restoreState: SavedReplState | undefined = initialSavedState;
-  while (true) {
-    await mount(restoreState);
+  try {
+    while (true) {
+      await mount(restoreState);
 
-    if (pendingEditor) {
-      const { filePath, saved } = pendingEditor;
-      pendingEditor = null;
-      restoreState = saved;
-      // Ensure memory file's parent dir exists before opening editor
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
-      spawnSync(editor, [filePath], { stdio: 'inherit' });
-      // Loop continues — re-mount the REPL with restored state
-    } else {
-      // Normal exit
-      break;
+      if (pendingEditor) {
+        const { filePath, saved } = pendingEditor;
+        pendingEditor = null;
+        restoreState = saved;
+        // Ensure memory file's parent dir exists before opening editor
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
+        spawnSync(editor, [filePath], { stdio: 'inherit' });
+        // Loop continues — re-mount the REPL with restored state
+      } else {
+        // Normal exit
+        break;
+      }
     }
+  } finally {
+    await mcpManager?.closeAll();
   }
 }

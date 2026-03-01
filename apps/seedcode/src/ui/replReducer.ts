@@ -5,6 +5,7 @@ import type { TaskItem } from '../tools/task.js';
 import type { ToolCallEntry } from './ToolCallView.js';
 import type { SessionEntry } from '../sessions/index.js';
 import type { SkillEntry } from '../context/index.js';
+import type { McpServerStatus } from '../mcp/manager.js';
 
 export type TurnEntry =
   | { type: 'user'; content: string }
@@ -28,6 +29,8 @@ export interface AppState {
   availableSkills: SkillEntry[];
   resumeSessions: SessionEntry[] | null;
   memoryPicker: boolean;
+  mcpPicker: boolean;
+  mcpServers: McpServerStatus[];
   /** Current tool step number (1-based) during streaming, null when idle */
   currentStep: number | null;
 }
@@ -56,6 +59,8 @@ export type Action =
   | { type: 'SET_AVAILABLE_SKILLS'; skills: SkillEntry[] }
   | { type: 'SET_RESUME_SESSIONS'; sessions: SessionEntry[] | null }
   | { type: 'SET_MEMORY_PICKER'; value: boolean }
+  | { type: 'SET_MCP_PICKER'; value: boolean }
+  | { type: 'SET_MCP_SERVERS'; servers: McpServerStatus[] }
   | { type: 'SET_STEP'; step: number }
   | { type: 'UPDATE_TOOL_CALL_PROGRESS'; toolName: string; progress: string }
   | { type: 'CLEAR' };
@@ -162,6 +167,12 @@ export function replReducer(state: AppState, action: Action): AppState {
 
     case 'SET_MEMORY_PICKER':
       return { ...state, memoryPicker: action.value };
+
+    case 'SET_MCP_PICKER':
+      return { ...state, mcpPicker: action.value };
+
+    case 'SET_MCP_SERVERS':
+      return { ...state, mcpServers: action.servers };
 
     case 'SET_STEP':
       return { ...state, currentStep: action.step };

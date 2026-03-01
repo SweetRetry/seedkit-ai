@@ -13,6 +13,7 @@ import { InputBox } from './InputBox.js';
 import { ModelPicker } from './pickers/ModelPicker.js';
 import { ResumePicker } from './pickers/ResumePicker.js';
 import { MemoryPicker } from './pickers/MemoryPicker.js';
+import { McpPicker, type McpPickerAction } from './pickers/McpPicker.js';
 import { QuestionPrompt } from './QuestionPrompt.js';
 import { MessageList } from './MessageList.js';
 import { StreamingIndicator, buildBannerText } from './StatusBar.js';
@@ -22,6 +23,7 @@ import { TaskListView } from './TaskListView.js';
 import { replReducer, type AppState } from './replReducer.js';
 import { useAgentContext } from './hooks/useAgentContext.js';
 import { useAgentStream, estimateContextPct } from './hooks/useAgentStream.js';
+import type { McpManager } from '../mcp/manager.js';
 
 export type { TurnEntry } from './replReducer.js';
 
@@ -42,6 +44,7 @@ interface ReplAppProps {
   skipConfirm?: boolean;
   initialSkills?: SkillEntry[];
   savedState?: SavedReplState;
+  mcpManager?: McpManager;
 }
 
 const INITIAL_STATE = (initialConfig: Config, initialSkills: SkillEntry[]): AppState => ({
@@ -59,10 +62,12 @@ const INITIAL_STATE = (initialConfig: Config, initialSkills: SkillEntry[]): AppS
   availableSkills: initialSkills,
   resumeSessions: null,
   memoryPicker: false,
+  mcpPicker: false,
+  mcpServers: [],
   currentStep: null,
 });
 
-export function ReplApp({ config: initialConfig, version, apiKey, onExit, onOpenEditor, skipConfirm = false, initialSkills = [], savedState }: ReplAppProps) {
+export function ReplApp({ config: initialConfig, version, apiKey, onExit, onOpenEditor, skipConfirm = false, initialSkills = [], savedState, mcpManager }: ReplAppProps) {
   const cwd = process.cwd();
 
   const [state, dispatch] = useReducer(replReducer, undefined, () => {
@@ -86,7 +91,14 @@ export function ReplApp({ config: initialConfig, version, apiKey, onExit, onOpen
 
   const context = useAgentContext({ cwd, dispatch });
 
-  const stream = useAgentStream({ cwd, skipConfirm, apiKey, dispatch, stateRef, context });
+  const stream = useAgentStream({ cwd, skipConfirm, apiKey, dispatch, stateRef, context, mcpManager });
+
+  // Initialize MCP server status in reducer
+  useEffect(() => {
+    if (mcpManager) {
+      dispatch({ type: 'SET_MCP_SERVERS', servers: mcpManager.getStatus() });
+    }
+  }, [mcpManager]);
 
   // Restore conversation state after returning from editor
   useEffect(() => {
@@ -237,6 +249,15 @@ export function ReplApp({ config: initialConfig, version, apiKey, onExit, onOpen
       dispatch({ type: 'SET_MEMORY_PICKER', value: true });
       return;
     }
+    if (cmdResult.type === 'mcp_picker') {
+      if (mcpManager) {
+        dispatch({ type: 'SET_MCP_SERVERS', servers: mcpManager.getStatus() });
+        dispatch({ type: 'SET_MCP_PICKER', value: true });
+      } else {
+        dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: 'No MCP servers configured. Add .mcp.json or ~/.seedcode/mcp.json' } });
+      }
+      return;
+    }
     if (cmdResult.type === 'resume') {
       handleResumeSelect(cmdResult.sessionId);
       return;
@@ -324,6 +345,16 @@ export function ReplApp({ config: initialConfig, version, apiKey, onExit, onOpen
     }
   }, [onOpenEditor, stream, context, stateRef]);
 
+  const handleMcpAction = useCallback(async (action: McpPickerAction) => {
+    dispatch({ type: 'SET_MCP_PICKER', value: false });
+    if (action?.type === 'reconnect' && mcpManager) {
+      dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: `Reconnecting ${action.name}...` } });
+      await mcpManager.reconnect(action.name);
+      dispatch({ type: 'SET_MCP_SERVERS', servers: mcpManager.getStatus() });
+      dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: 'MCP servers refreshed' } });
+    }
+  }, [mcpManager]);
+
   const handlePasteImage = useCallback((): { mediaId: string; byteSize: number } | null => {
     try {
       // Dynamic require to avoid top-level import on non-macOS
@@ -341,7 +372,7 @@ export function ReplApp({ config: initialConfig, version, apiKey, onExit, onOpen
     staticTurns, activeTurn, activeReasoning, streaming,
     activeToolCalls, activeTasks, pendingConfirm, pendingQuestion,
     liveConfig, waitingForModel, availableSkills, resumeSessions, memoryPicker,
-    currentStep,
+    mcpPicker, mcpServers, currentStep,
   } = state;
 
   const contextPct = streaming ? estimateContextPct(context.systemPromptRef.current, stream.messages.current) : undefined;
@@ -376,6 +407,8 @@ export function ReplApp({ config: initialConfig, version, apiKey, onExit, onOpen
         <ResumePicker sessions={resumeSessions} onSelect={handleResumeSelect} />
       ) : memoryPicker ? (
         <MemoryPicker memoryFilePath={context.memoryFilePathRef.current} onSelect={handleMemorySelect} />
+      ) : mcpPicker ? (
+        <McpPicker servers={mcpServers} onAction={handleMcpAction} />
       ) : isWaitingForQuestion ? (
         <QuestionPrompt
           question={pendingQuestion!.question}

@@ -7,9 +7,11 @@ import { buildTools, isToolError, createTaskStore, type ConfirmFn, type AskQuest
 import { allMediaIds, getMedia, deleteMedia } from '../../media-store.js';
 import { saveSession } from '../../sessions/index.js';
 import { withRetry, classifyError } from '../../utils/retry.js';
+import type { ToolSet } from 'ai';
 import type { ToolCallEntry } from '../ToolCallView.js';
 import type { Action, TurnEntry } from '../replReducer.js';
 import type { AgentContext } from './useAgentContext.js';
+import type { McpManager } from '../../mcp/manager.js';
 
 const MAX_TOOL_STEPS = 50;
 
@@ -35,6 +37,7 @@ interface UseAgentStreamOptions {
   dispatch: React.Dispatch<Action>;
   stateRef: React.MutableRefObject<{ totalTokens: number }>;
   context: AgentContext;
+  mcpManager?: McpManager;
 }
 
 export interface AgentStream {
@@ -84,7 +87,7 @@ function buildToolDescription(toolName: string, input: Record<string, unknown>):
 }
 
 export function useAgentStream({
-  cwd, skipConfirm, apiKey, dispatch, stateRef, context,
+  cwd, skipConfirm, apiKey, dispatch, stateRef, context, mcpManager,
 }: UseAgentStreamOptions): AgentStream {
   const messages = useRef<ModelMessage[]>([]);
   const turnCount = useRef(0);
@@ -131,7 +134,20 @@ export function useAgentStream({
     };
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
-    const tools = buildTools({ cwd, confirm, askQuestion, skipConfirm, taskStore: taskStore.current, availableSkills: context.availableSkillsRef.current, model, onTaskChange, onSpawnAgentProgress, abortSignal: abortController.signal });
+    const builtinTools = buildTools({ cwd, confirm, askQuestion, skipConfirm, taskStore: taskStore.current, availableSkills: context.availableSkillsRef.current, model, onTaskChange, onSpawnAgentProgress, abortSignal: abortController.signal });
+
+    // Merge MCP tools (if any connected servers)
+    let tools: typeof builtinTools & Record<string, ToolSet[string]> = builtinTools;
+    if (mcpManager) {
+      try {
+        const mcpTools = await mcpManager.allTools();
+        if (Object.keys(mcpTools).length > 0) {
+          tools = { ...builtinTools, ...mcpTools } as typeof tools;
+        }
+      } catch {
+        dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: 'MCP tools unavailable' } });
+      }
+    }
 
     const scheduleFlush = (text: string, done: boolean) => {
       accumulated = text;

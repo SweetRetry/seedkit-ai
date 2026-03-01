@@ -25,6 +25,7 @@ export type SlashCommandResult =
   | { type: 'resume'; sessionId: string }
   | { type: 'resume_picker' }
   | { type: 'memory_picker' }
+  | { type: 'mcp_picker' }
   | { type: 'not_command' };
 
 export interface SessionState {
@@ -97,6 +98,9 @@ export function handleSlashCommand(
     case 'memory':
       return { type: 'memory_picker' };
 
+    case 'mcp':
+      return { type: 'mcp_picker' };
+
     case 'sessions':
       return { type: 'handled', output: buildSessionsList(state) };
 
@@ -127,6 +131,7 @@ export const SLASH_COMMANDS: Array<{ name: string; args?: string; desc: string }
   { name: 'skills',   desc: 'list skills · /skills:<name> to activate' },
   { name: 'compact',  desc: 'summarise history' },
   { name: 'memory',   desc: 'open project memory file in $EDITOR' },
+  { name: 'mcp',      desc: 'show MCP server status' },
   { name: 'exit',     desc: 'end session' },
 ];
 
