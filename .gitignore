@@ -6,6 +6,10 @@ dist
 .next
 output
 
+# Rust / Tauri
+target
+**/src-tauri/gen
+
 # fumadocs generated
 .source
 
@@ -35,6 +39,9 @@ tmp
 # IDE
 .idea
 .vscode
+
+# seedcode runtime
+.seedcode
 
 # Archives
 *.zip
