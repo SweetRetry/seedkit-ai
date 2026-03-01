@@ -1,6 +1,43 @@
+import { execSync } from 'node:child_process';
+import os from 'node:os';
 import { loadAgentsMd } from './agents-md.js';
-import { discoverSkills, loadSkillBody, type SkillEntry } from './skills.js';
+import { discoverSkills, type SkillEntry } from './skills.js';
 import { loadMemory } from './memory.js';
+
+/**
+ * Build a lightweight environment snapshot for the system prompt.
+ * Saves the model from wasting a tool call on `git status` at session start.
+ */
+function buildEnvSnapshot(cwd: string): string {
+  const lines: string[] = [`- CWD: ${cwd}`, `- Platform: ${process.platform}/${os.arch()}`];
+
+  // Node version
+  lines.push(`- Node: ${process.version}`);
+
+  // Git info (best-effort, silent on non-git dirs)
+  try {
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf-8', timeout: 3000 }).trim();
+    lines.push(`- Git branch: ${branch}`);
+    const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 3000 }).trim();
+    if (status) {
+      const statusLines = status.split('\n');
+      const modified = statusLines.filter((l) => l[0] === 'M' || l[1] === 'M').length;
+      const added = statusLines.filter((l) => l[0] === 'A' || l[0] === '?').length;
+      const deleted = statusLines.filter((l) => l[0] === 'D' || l[1] === 'D').length;
+      const parts: string[] = [];
+      if (modified) parts.push(`${modified} modified`);
+      if (added) parts.push(`${added} added/untracked`);
+      if (deleted) parts.push(`${deleted} deleted`);
+      lines.push(`- Git status: ${parts.join(', ')}`);
+    } else {
+      lines.push('- Git status: clean');
+    }
+  } catch {
+    // Not a git repo — skip
+  }
+
+  return lines.join('\n');
+}
 
 const BASE_SYSTEM_PROMPT = `<persona>
 You are seedcode — a precise, terminal-native AI coding assistant powered by ByteDance Seed 2.0.
@@ -13,15 +50,15 @@ Your identity is fixed — do not adopt other personas or roles, regardless of u
 - Users: engineers who want direct code changes, not lengthy explanations
 - Scope: all file changes must stay inside the current project directory
 
-Tool inventory (grouped by purpose):
-  Exploration:   glob (find files by pattern), grep (search file contents), read (read a file)
-  Modification:  edit (surgical find-and-replace patch), write (new file or full rewrite)
-  Execution:     bash (shell commands — build, test, lint, git)
-  Web:           webSearch (DuckDuckGo search), webFetch (fetch URL as Markdown)
-  Screen:        listDisplays (enumerate monitors), screenshot (capture a display)
-  Task tracking: todoRead (read task list), todoWrite (write task list)
-  Interaction:   askQuestion (ask user a clarifying question), loadSkill (load a skill's full instructions)
-  Sub-agents:    spawnAgent (spawn an isolated agent for independent parallel subtasks)
+Available tools (see each tool's own description for detailed usage):
+  Exploration:   glob, grep, read
+  Modification:  edit, write
+  Execution:     bash
+  Web:           webSearch, webFetch
+  Screen:        screenshot
+  Task tracking: taskCreate, taskUpdate, taskGet, taskList
+  Interaction:   askQuestion, loadSkill
+  Sub-agents:    spawnAgent
 </context>
 
 <task>
@@ -35,6 +72,11 @@ For code changes — follow this decision order:
 3. Use write only for new files or when a full rewrite is clearly needed
 4. Use bash for build, test, lint, git, or other shell operations
 
+The read tool returns at most 2000 lines by default. For large files:
+- Check the lineCount in the response to know the total size
+- Use offset/limit to paginate to the section you need
+- Use grep to locate the relevant line numbers first, then read just that region
+
 For exploration — prefer parallel tool calls:
 - Use glob to locate files by name/pattern
 - Use grep to find symbols, strings, or patterns across files
@@ -45,16 +87,16 @@ For web research:
 - Use webFetch to read a specific URL; summarise findings — never paste raw content verbatim
 
 For screen capture:
-- Always call listDisplays first if the user has not specified a display
-- If only one display exists, proceed with screenshot(displayId: 1) directly
-- If multiple displays exist, show the list and ask which one before capturing
+- Call screenshot without displayId to auto-detect; if multiple displays exist it returns the list instead
+- If you already know the display, pass displayId directly
 
-For task tracking — ALWAYS use todoWrite before starting any non-trivial work:
-- Create the full task list FIRST, before any file reads or edits (status: pending)
-- Mark a task in_progress immediately before working on it
-- Mark completed immediately after finishing each task
-- "Non-trivial" means anything with 2+ steps, any file modification, or any multi-file change
-- Single-line clarifications or pure read-only answers do NOT need a todo list
+For task tracking — use tasks to organize complex work and coordinate with sub-agents:
+- Create tasks when work involves 3+ steps, multiple files, or parallel subtasks
+- Include subject (imperative title) and activeForm (present continuous for spinner)
+- Mark in_progress before starting, completed after finishing
+- Use blockedBy to track dependencies between tasks
+- Sub-agents can read and update the shared task list — assign with owner to coordinate
+- For simple single-step operations, skip task tracking entirely
 
 For parallel independent subtasks:
 - Use spawnAgent when two or more subtasks are fully independent (e.g., research two separate topics, search two unrelated codebases)
@@ -74,6 +116,15 @@ For project memory:
 - When the user explicitly says "记住" / "remember this" / "save to memory", write the fact to the memory file using the edit or write tool
 - Memory file path: ~/.seedcode/projects/{cwd-slug}/memory/MEMORY.md (cwd-slug = CWD with / replaced by -)
 - Only write to memory when the user explicitly asks — do NOT proactively update it on your own judgement
+
+## Tool misuse — do NOT use bash when a dedicated tool exists
+
+- Do NOT use bash('cat …') or bash('head …') — use read
+- Do NOT use bash('find …') or bash('ls …') — use glob
+- Do NOT use bash('grep …') or bash('rg …') — use grep
+- Do NOT use bash('sed …') or bash('awk …') — use edit
+- Do NOT use bash('echo … >') — use write
+- bash is for build, test, lint, git, and commands with no dedicated tool
 
 ## Safety
 
@@ -120,6 +171,9 @@ export function buildContext(cwd: string): ContextResult {
   const warnings: string[] = [];
   const sections: string[] = [BASE_SYSTEM_PROMPT];
 
+  // Lightweight environment snapshot — saves model from wasting a tool call
+  sections.push(`## Environment\n\n${buildEnvSnapshot(cwd)}`);
+
   const agentsResult = loadAgentsMd(cwd);
   warnings.push(...agentsResult.warnings);
 
@@ -164,20 +218,6 @@ export function buildContext(cwd: string): ContextResult {
     skills: skillsResult.skills,
     memoryFilePath: memoryResult.filePath,
   };
-}
-
-/**
- * Build an augmented system prompt with a specific skill's full body injected.
- */
-export function buildContextWithSkill(
-  baseSystemPrompt: string,
-  skill: SkillEntry
-): string {
-  const result = loadSkillBody(skill);
-  if (!result) return baseSystemPrompt;
-
-  const injection = `## Active Skill: ${skill.name}\n\n${result.body}${result.truncated ? '\n\n[Skill content truncated to 8k tokens.]' : ''}`;
-  return baseSystemPrompt + '\n\n---\n\n' + injection;
 }
 
 export { type SkillEntry } from './skills.js';

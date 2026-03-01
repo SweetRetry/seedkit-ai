@@ -1,7 +1,9 @@
 import { useRef } from 'react';
-import { streamText, stepCountIs, generateText, type ModelMessage } from 'ai';
+import { streamText, stepCountIs, generateText, NoOutputGeneratedError, type ModelMessage } from 'ai';
+import { createSeed } from '@seedkit-ai/ai-sdk-provider';
+import { PLAN_PRESETS } from '../../config/schema.js';
 import type { Config } from '../../config/schema.js';
-import { buildTools, isToolError, createTodoStore, type ConfirmFn, type AskQuestionFn } from '../../tools/index.js';
+import { buildTools, isToolError, createTaskStore, type ConfirmFn, type AskQuestionFn } from '../../tools/index.js';
 import { allMediaIds, getMedia, deleteMedia } from '../../media-store.js';
 import { saveSession } from '../../sessions/index.js';
 import type { ToolCallEntry } from '../ToolCallView.js';
@@ -14,7 +16,7 @@ const CONTEXT_LIMIT = 256_000;
 /** Start warning in StatusBar above this fraction */
 export const CONTEXT_WARN_THRESHOLD = 0.75;
 /** Auto-compact before sending when estimated usage exceeds this fraction */
-const CONTEXT_COMPACT_THRESHOLD = 0.85;
+const CONTEXT_COMPACT_THRESHOLD = 0.70;
 
 /** Rough token estimate: 4 chars per token */
 function estimateTokens(systemPrompt: string, messages: ModelMessage[]): number {
@@ -28,7 +30,7 @@ export function estimateContextPct(systemPrompt: string, messages: ModelMessage[
 interface UseAgentStreamOptions {
   cwd: string;
   skipConfirm: boolean;
-  seed: ReturnType<typeof import('@seedkit-ai/ai-sdk-provider').createSeed>;
+  apiKey: string;
   dispatch: React.Dispatch<Action>;
   stateRef: React.MutableRefObject<{ totalTokens: number }>;
   context: AgentContext;
@@ -39,7 +41,7 @@ export interface AgentStream {
   turnCount: React.MutableRefObject<number>;
   inFlight: React.MutableRefObject<boolean>;
   abortRef: React.MutableRefObject<boolean>;
-  todoStore: React.MutableRefObject<ReturnType<typeof createTodoStore>>;
+  taskStore: React.MutableRefObject<ReturnType<typeof createTaskStore>>;
   runStream: (cfg: Config) => Promise<void>;
   runCompact: (cfg: Config) => Promise<void>;
 }
@@ -60,14 +62,16 @@ function buildToolDescription(toolName: string, input: Record<string, unknown>):
       return String(input.query ?? '');
     case 'webFetch':
       return String(input.url ?? '');
-    case 'listDisplays':
-      return 'list displays';
     case 'screenshot':
-      return `display ${input.displayId ?? 1}`;
-    case 'todoWrite':
-      return input.id ? `update task ${input.id}` : `create: ${input.content}`;
-    case 'todoRead':
-      return input.id ? `read task ${input.id}` : 'list all tasks';
+      return input.displayId ? `display ${input.displayId}` : 'auto-detect';
+    case 'taskCreate':
+      return `create: ${input.subject ?? ''}`;
+    case 'taskUpdate':
+      return `update ${input.taskId}${input.status ? ` → ${input.status}` : ''}`;
+    case 'taskGet':
+      return `get ${input.taskId}`;
+    case 'taskList':
+      return 'list tasks';
     case 'loadSkill':
       return String(input.name ?? '');
     case 'spawnAgent':
@@ -78,19 +82,22 @@ function buildToolDescription(toolName: string, input: Record<string, unknown>):
 }
 
 export function useAgentStream({
-  cwd, skipConfirm, seed, dispatch, stateRef, context,
+  cwd, skipConfirm, apiKey, dispatch, stateRef, context,
 }: UseAgentStreamOptions): AgentStream {
   const messages = useRef<ModelMessage[]>([]);
   const turnCount = useRef(0);
   const inFlight = useRef(false);
   const abortRef = useRef(false);
-  const todoStore = useRef(createTodoStore(cwd, context.sessionIdRef.current));
+  const taskStore = useRef(createTaskStore(cwd, context.sessionIdRef.current));
 
   const runStream = async (cfg: Config) => {
     let accumulated = '';
     let accReasoning = '';
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
     let reasoningFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Text from the last step — rendered only when the entire stream ends. */
+    let lastStepText = '';
+    let lastStepReasoning = '';
 
     const confirm: ConfirmFn = (pending) => {
       dispatch({ type: 'SET_PENDING_CONFIRM', pending });
@@ -100,11 +107,13 @@ export function useAgentStream({
       dispatch({ type: 'SET_PENDING_QUESTION', pending });
     };
 
+    const preset = PLAN_PRESETS[cfg.plan];
+    const seed = createSeed({ apiKey, baseURL: preset.baseURL });
     const model = seed.chat(cfg.model as Parameters<typeof seed.chat>[0]);
-    const onTodoChange = (items: import('../../tools/todo.js').TodoItem[]) => {
-      dispatch({ type: 'SET_ACTIVE_TODOS', todos: items });
+    const onTaskChange = (items: import('../../tools/task.js').TaskItem[]) => {
+      dispatch({ type: 'SET_ACTIVE_TASKS', tasks: items });
     };
-    const tools = buildTools({ cwd, confirm, askQuestion, skipConfirm, todoStore: todoStore.current, availableSkills: context.availableSkillsRef.current, model, onTodoChange });
+    const tools = buildTools({ cwd, confirm, askQuestion, skipConfirm, taskStore: taskStore.current, availableSkills: context.availableSkillsRef.current, model, onTaskChange });
 
     const scheduleFlush = (text: string, done: boolean) => {
       accumulated = text;
@@ -156,8 +165,11 @@ export function useAgentStream({
       for (const id of pendingMediaIds) deleteMedia(id);
     }
 
+    // Declared outside try so we can await response after streaming
+    let streamResult: ReturnType<typeof streamText> | null = null;
+
     try {
-      const result = streamText({
+      streamResult = streamText({
         model,
         system: context.getEffectiveSystemPrompt(),
         messages: messages.current,
@@ -166,16 +178,15 @@ export function useAgentStream({
         ...(cfg.thinking ? { providerOptions: { seed: { thinking: true } } } : {}),
         onStepFinish: (step) => {
           dispatch({ type: 'SET_STEP', step: step.stepNumber + 1 });
-          const stepReasoning = step.reasoningText ?? '';
 
           if (step.text) {
             if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
             if (reasoningFlushTimer) { clearTimeout(reasoningFlushTimer); reasoningFlushTimer = null; }
 
-            dispatch({
-              type: 'PUSH_STATIC',
-              entry: { type: 'assistant', content: step.text, done: false, reasoning: stepReasoning || undefined },
-            });
+            // Don't push assistant text during the tool loop — save it.
+            // Only the final step's text will be rendered when the stream ends.
+            lastStepText = step.text;
+            lastStepReasoning = step.reasoningText ?? '';
             accumulated = '';
             dispatch({ type: 'STEP_FINISH' });
           }
@@ -224,17 +235,46 @@ export function useAgentStream({
         },
       });
 
-      for await (const part of result.fullStream) {
+      for await (const part of streamResult.fullStream) {
         if (abortRef.current) break;
         if (part.type === 'reasoning-delta') {
           scheduleReasoningFlush(accReasoning + part.text);
         } else if (part.type === 'text-delta') {
           scheduleFlush(accumulated + part.text, false);
+        } else if (part.type === 'tool-input-start') {
+          // Tool call starting — discard any intermediate assistant text (e.g. "Let me search…").
+          // This text will also appear in onStepFinish where we intentionally skip it for tool steps.
+          if (accumulated) {
+            if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+            if (reasoningFlushTimer) { clearTimeout(reasoningFlushTimer); reasoningFlushTimer = null; }
+            accumulated = '';
+            accReasoning = '';
+            dispatch({ type: 'STEP_FINISH' });
+          }
+          dispatch({
+            type: 'PUSH_ACTIVE_TOOL_CALL',
+            entry: {
+              id: part.toolCallId,
+              toolName: part.toolName as import('../../tools/index.js').ToolName,
+              description: part.toolName,
+              status: 'running',
+            },
+          });
         }
       }
     } catch (err) {
       if (flushTimer) clearTimeout(flushTimer);
       if (reasoningFlushTimer) clearTimeout(reasoningFlushTimer);
+
+      // NoOutputGeneratedError: API returned empty response (no text, no tool calls).
+      // This is recoverable — show a friendly message and let the user retry.
+      if (NoOutputGeneratedError.isInstance(err)) {
+        messages.current.pop();
+        dispatch({ type: 'STREAM_ERROR', content: 'Model returned an empty response. Try rephrasing or sending again.' });
+        inFlight.current = false;
+        return;
+      }
+
       messages.current.pop();
       const msg = err instanceof Error ? err.message : String(err);
       const isAuthError = msg.includes('401') || msg.toLowerCase().includes('invalid api key');
@@ -257,11 +297,33 @@ export function useAgentStream({
     scheduleFlush(accumulated, true);
     dispatch({ type: 'STREAM_END' });
 
-    if (!abortRef.current && accumulated) {
-      messages.current.push({ role: 'assistant', content: accumulated });
-      dispatch({ type: 'PUSH_STATIC', entry: { type: 'assistant', content: accumulated, done: true } });
-    } else if (abortRef.current) {
+    if (abortRef.current) {
+      // User interrupted — remove the user message we pushed
       messages.current.pop();
+    } else {
+      // Retrieve all response messages (assistant + tool) from the completed stream.
+      // Includes intermediate tool-call and tool-result messages from multi-step loops.
+      try {
+        const { messages: responseMessages } = await streamResult!.response;
+        messages.current.push(...(responseMessages as ModelMessage[]));
+      } catch (err) {
+        // Stream completed but response extraction failed (e.g. empty response).
+        // Steps already dispatched via onStepFinish — just log and continue.
+        if (!NoOutputGeneratedError.isInstance(err)) {
+          dispatch({ type: 'PUSH_STATIC', entry: { type: 'error', content: `Warning: failed to extract response messages — ${err instanceof Error ? err.message : String(err)}` } });
+        }
+      }
+
+      // Render the final assistant text — only the last step's text is shown.
+      // `lastStepText` is set by onStepFinish; `accumulated` is a fallback for
+      // streaming text that arrived after the last onStepFinish (unlikely but safe).
+      const finalText = lastStepText || accumulated;
+      if (finalText) {
+        dispatch({
+          type: 'PUSH_STATIC',
+          entry: { type: 'assistant', content: finalText, done: true, reasoning: lastStepReasoning || undefined },
+        });
+      }
     }
 
     saveSession(cwd, context.sessionIdRef.current, messages.current);
@@ -278,8 +340,10 @@ export function useAgentStream({
     dispatch({ type: 'PUSH_STATIC', entry: { type: 'info', content: '⏳ Compacting conversation...' } });
 
     try {
+      const compactPreset = PLAN_PRESETS[cfg.plan];
+      const compactSeed = createSeed({ apiKey, baseURL: compactPreset.baseURL });
       const summary = await generateText({
-        model: seed.chat(cfg.model as Parameters<typeof seed.chat>[0]),
+        model: compactSeed.chat(cfg.model as Parameters<typeof compactSeed.chat>[0]),
         messages: [
           ...messages.current,
           {
@@ -317,5 +381,5 @@ export function useAgentStream({
     dispatch({ type: 'STREAM_END' });
   };
 
-  return { messages, turnCount, inFlight, abortRef, todoStore, runStream, runCompact };
+  return { messages, turnCount, inFlight, abortRef, taskStore, runStream, runCompact };
 }

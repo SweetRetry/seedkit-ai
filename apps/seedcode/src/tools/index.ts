@@ -8,15 +8,15 @@ import { grepFiles } from './grep.js';
 import { runBash, truncateBashOutput } from './bash.js';
 import { webSearch, webFetch } from '@seedkit-ai/tools';
 import { captureScreenshot, getDisplayList } from './screenshot.js';
-import { createTodoStore } from './todo.js';
+import { createTaskStore } from './task.js';
 import { loadSkillBody, type SkillEntry } from '../context/skills.js';
 import { runDiagnostics, formatDiagnostics } from './diagnostics.js';
 import { buildSpawnAgentTool } from './spawn-agent.js';
 
-export type ToolName = 'read' | 'edit' | 'write' | 'glob' | 'grep' | 'bash' | 'webSearch' | 'webFetch' | 'listDisplays' | 'screenshot' | 'todoWrite' | 'todoRead' | 'askQuestion' | 'loadSkill' | 'spawnAgent';
+export type ToolName = 'read' | 'edit' | 'write' | 'glob' | 'grep' | 'bash' | 'webSearch' | 'webFetch' | 'screenshot' | 'taskCreate' | 'taskUpdate' | 'taskGet' | 'taskList' | 'askQuestion' | 'loadSkill' | 'spawnAgent';
 
-export { createTodoStore };
-export type { TodoStore, TodoItem } from './todo.js';
+export { createTaskStore };
+export type { TaskStore, TaskItem, TaskStatus } from './task.js';
 
 export type DiffHunkLine = { kind: 'context' | 'removed' | 'added'; text: string; lineNo?: number };
 
@@ -57,19 +57,19 @@ export function isToolError(output: unknown): output is ToolError {
   return typeof output === 'object' && output !== null && 'error' in output;
 }
 
-export type TodoChangeFn = (items: import('./todo.js').TodoItem[]) => void;
+export type TaskChangeFn = (items: import('./task.js').TaskItem[]) => void;
 
 export function buildTools(opts: {
   cwd: string;
   confirm: ConfirmFn;
   askQuestion: AskQuestionFn;
   skipConfirm: boolean;
-  todoStore: ReturnType<typeof createTodoStore>;
+  taskStore: ReturnType<typeof createTaskStore>;
   availableSkills: SkillEntry[];
   model: LanguageModel;
-  onTodoChange?: TodoChangeFn;
+  onTaskChange?: TaskChangeFn;
 }) {
-  const { cwd, confirm, askQuestion, skipConfirm, todoStore, availableSkills, model, onTodoChange } = opts;
+  const { cwd, confirm, askQuestion, skipConfirm, taskStore, availableSkills, model, onTaskChange } = opts;
 
   const requestConfirm = (
     toolName: ToolName,
@@ -82,15 +82,35 @@ export function buildTools(opts: {
     });
   };
 
+  // Wrap a task tool's execute to fire the onTaskChange callback
+  function wrapTaskTool<T extends { execute?: (...args: unknown[]) => Promise<unknown> }>(t: T): T {
+    if (!onTaskChange || !t.execute) return t;
+    const original = t.execute;
+    return {
+      ...t,
+      execute: async (...args: unknown[]) => {
+        const result = await original(...args);
+        onTaskChange(Array.from(taskStore.items.values()).filter((i) => i.status !== 'deleted'));
+        return result;
+      },
+    };
+  }
+
   return {
     read: tool({
-      description: 'Read the contents of a file. For text files, returns content and line count. For image files (.png/.jpg/.jpeg/.gif/.webp/.bmp), stores the image for display in the next response and returns a mediaId.',
+      description:
+        'Read a file. By default reads up to 2000 lines from the start. ' +
+        'Use offset and limit to paginate through large files. ' +
+        'Lines longer than 2000 chars are truncated. Returns cat -n formatted output with line numbers. ' +
+        'For image files (.png/.jpg/.jpeg/.gif/.webp/.bmp), stores the image for display and returns a mediaId.',
       inputSchema: z.object({
         path: z.string().describe('Path to the file to read (absolute or relative to CWD)'),
+        offset: z.number().int().min(0).optional().describe('Line offset to start reading from (0-based). Omit to start from the beginning.'),
+        limit: z.number().int().min(1).optional().describe('Max number of lines to return (default: 2000).'),
       }),
-      execute: async ({ path: filePath }): Promise<{ content: string; lineCount: number; warning?: string } | { mediaId: string; mediaType: string; byteSize: number } | ToolError> => {
+      execute: async ({ path: filePath, offset, limit }): Promise<{ content: string; lineCount: number; warning?: string } | { mediaId: string; mediaType: string; byteSize: number } | ToolError> => {
         try {
-          const result = readFile(filePath);
+          const result = readFile(filePath, offset, limit);
           if ('mediaId' in result) return result;
           const { content, lineCount, warning } = result;
           return { content, lineCount, ...(warning ? { warning } : {}) };
@@ -108,7 +128,7 @@ export function buildTools(opts: {
         old_string: z.string().describe('Exact text to find — must appear exactly once in the file'),
         new_string: z.string().describe('Text to replace it with'),
       }),
-      execute: async ({ path: filePath, old_string, new_string }): Promise<{ success: true; message: string } | ToolError> => {
+      execute: async ({ path: filePath, old_string, new_string }): Promise<{ success: true; message: string; diagnostics?: string } | ToolError> => {
         try {
           const diff = computeEditDiff(filePath, old_string, new_string);
           if ('error' in diff) return diff;
@@ -120,8 +140,8 @@ export function buildTools(opts: {
 
           const result = applyEdit(filePath, old_string, new_string);
           if ('error' in result) return result;
-          const diag = runDiagnostics(filePath, cwd);
-          return { success: true, message: result.message + formatDiagnostics(diag) };
+          const diagOutput = formatDiagnostics(runDiagnostics(filePath, cwd));
+          return { success: true, message: result.message, ...(diagOutput ? { diagnostics: diagOutput } : {}) };
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
         }
@@ -135,7 +155,7 @@ export function buildTools(opts: {
         path: z.string().describe('Path to the file to write'),
         content: z.string().describe('Content to write to the file'),
       }),
-      execute: async ({ path: filePath, content }): Promise<{ success: true; message: string } | ToolError> => {
+      execute: async ({ path: filePath, content }): Promise<{ success: true; message: string; diagnostics?: string } | ToolError> => {
         try {
           const diff = computeDiff(filePath, content);
           const description =
@@ -149,12 +169,12 @@ export function buildTools(opts: {
           }
 
           writeFile(filePath, content);
-          const diag = runDiagnostics(filePath, cwd);
           const baseMsg =
             diff.oldContent === null
               ? `Created ${filePath} (${diff.added} lines)`
               : `Updated ${filePath} (+${diff.added} / -${diff.removed})`;
-          return { success: true, message: baseMsg + formatDiagnostics(diag) };
+          const diagOutput = formatDiagnostics(runDiagnostics(filePath, cwd));
+          return { success: true, message: baseMsg, ...(diagOutput ? { diagnostics: diagOutput } : {}) };
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
         }
@@ -184,7 +204,7 @@ export function buildTools(opts: {
         fileGlob: z.string().describe('Glob pattern to select which files to search'),
         cwd: z.string().optional().describe('Directory to search from (default: startup CWD)'),
       }),
-      execute: async ({ pattern, fileGlob, cwd: overrideCwd }): Promise<{ matches: unknown[]; count: number } | ToolError> => {
+      execute: async ({ pattern, fileGlob, cwd: overrideCwd }): Promise<{ matches: unknown[]; count: number; totalCount: number; truncated: boolean } | ToolError> => {
         try {
           return await grepFiles(pattern, fileGlob, overrideCwd ?? cwd);
         } catch (err) {
@@ -248,40 +268,36 @@ export function buildTools(opts: {
       },
     }),
 
-    listDisplays: tool({
-      description:
-        'List all connected displays/monitors. ' +
-        'Call this BEFORE taking a screenshot whenever the user has not specified which display to capture. ' +
-        'If only one display is found, proceed directly with screenshot(displayId: 1). ' +
-        'If multiple displays are found, show the list to the user and ask which one to capture.',
-      inputSchema: z.object({}),
-      execute: async (): Promise<{ displays: Array<{ id: number; description: string; isMain: boolean }>; count: number } | ToolError> => {
-        try {
-          return await getDisplayList();
-        } catch (err) {
-          return { error: err instanceof Error ? err.message : String(err) };
-        }
-      },
-    }),
-
     screenshot: tool({
       description:
         'Capture a screenshot on macOS. The image is automatically compressed ' +
         '(resized to max 1280px long-edge, converted to JPEG) to minimise token usage. ' +
-        'IMPORTANT: If the user has not specified a display, call listDisplays first. ' +
-        'If there is only one display, use displayId: 1. ' +
-        'If there are multiple displays, ask the user which display to capture before calling this tool. ' +
+        'If displayId is omitted: auto-detects displays. Single display → captures directly. ' +
+        'Multiple displays → returns the list so you can ask the user which to capture. ' +
         'Only supported on macOS; throws an error on other platforms.',
       inputSchema: z.object({
         displayId: z
           .number()
           .int()
           .min(1)
-          .describe('1-based display index. 1 = main display, 2 = second display, etc.'),
+          .optional()
+          .describe('1-based display index. Omit to auto-detect.'),
       }),
-      execute: async ({ displayId }): Promise<{ mediaId: string; mediaType: 'image/jpeg'; byteSize: number; rawByteSize: number; displayId: number } | ToolError> => {
+      execute: async ({ displayId }): Promise<
+        | { mediaId: string; mediaType: 'image/jpeg'; byteSize: number; rawByteSize: number; displayId: number }
+        | { displays: Array<{ id: number; description: string; isMain: boolean }>; count: number }
+        | ToolError
+      > => {
         try {
-          return await captureScreenshot(displayId);
+          if (displayId !== undefined) {
+            return await captureScreenshot(displayId);
+          }
+          // Auto-detect: single display → capture, multiple → return list
+          const { displays, count } = await getDisplayList();
+          if (count === 1) {
+            return await captureScreenshot(displays[0].id);
+          }
+          return { displays, count };
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
         }
@@ -334,18 +350,11 @@ export function buildTools(opts: {
       },
     }),
 
-    todoWrite: onTodoChange
-      ? {
-          ...todoStore.todoWrite,
-          execute: async (input: Parameters<NonNullable<typeof todoStore.todoWrite.execute>>[0], options: Parameters<NonNullable<typeof todoStore.todoWrite.execute>>[1]) => {
-            const result = await todoStore.todoWrite.execute!(input, options);
-            onTodoChange(Array.from(todoStore.items.values()));
-            return result;
-          },
-        }
-      : todoStore.todoWrite,
-    todoRead: todoStore.todoRead,
-    spawnAgent: buildSpawnAgentTool(model, cwd),
+    taskCreate: wrapTaskTool(taskStore.taskCreate),
+    taskUpdate: wrapTaskTool(taskStore.taskUpdate),
+    taskGet: taskStore.taskGet,
+    taskList: taskStore.taskList,
+    spawnAgent: buildSpawnAgentTool({ model, cwd, taskStore }),
   };
 }
 
