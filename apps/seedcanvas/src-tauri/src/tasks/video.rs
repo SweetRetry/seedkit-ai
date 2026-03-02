@@ -7,7 +7,7 @@ use tracing::{error, info, warn};
 use super::SharedDb;
 use crate::ark::types::{VideoContentItem, VideoGenRequest};
 use crate::ark::ArkClient;
-use crate::db::TaskRow;
+use crate::db::{AssetRow, TaskRow};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const POLL_TIMEOUT: Duration = Duration::from_secs(600); // 10 minutes
@@ -141,6 +141,8 @@ async fn execute(
     let asset_path = asset_dir.join(&filename);
     tokio::fs::write(&asset_path, &video_bytes).await?;
 
+    let file_size = video_bytes.len() as i64;
+
     let output = serde_json::json!({
         "assetPath": asset_path.to_string_lossy(),
         "width": 1280,
@@ -150,6 +152,26 @@ async fn execute(
     {
         let guard = db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
         guard.update_task(&task.id, "done", Some(&output.to_string()), Some(&ark_task_id), None)?;
+
+        // Record the generated asset in the assets table
+        let asset = AssetRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            project_id: task.project_id.clone(),
+            task_id: Some(task.id.clone()),
+            asset_type: "video".to_string(),
+            file_path: asset_path.to_string_lossy().to_string(),
+            file_name: filename.clone(),
+            prompt: Some(prompt.to_string()),
+            model: Some(model.to_string()),
+            width: Some(1280),
+            height: Some(720),
+            file_size: Some(file_size),
+            source: "generated".to_string(),
+            created_at: task.created_at.clone(),
+        };
+        if let Err(e) = guard.insert_asset(&asset) {
+            error!(task_id = %task.id, "failed to insert asset record: {e:#}");
+        }
     }
 
     Ok(())

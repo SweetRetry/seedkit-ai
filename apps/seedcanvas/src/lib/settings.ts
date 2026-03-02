@@ -4,6 +4,8 @@ import { getDataDir, readJson, writeJson } from './fs';
 export interface AppSettings {
   apiKey: string;
   baseURL: string;
+  defaultImageModel?: string;
+  defaultVideoModel?: string;
 }
 
 const DEFAULTS: AppSettings = {

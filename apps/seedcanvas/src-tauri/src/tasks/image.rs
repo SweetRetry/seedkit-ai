@@ -7,7 +7,7 @@ use tracing::{error, info};
 use super::SharedDb;
 use crate::ark::types::ImageGenRequest;
 use crate::ark::ArkClient;
-use crate::db::TaskRow;
+use crate::db::{AssetRow, TaskRow};
 
 /// Execute image generation: call ARK API, decode base64, write asset, update DB.
 pub async fn run_image_task(
@@ -106,9 +106,31 @@ async fn execute(
         "height": height,
     });
 
+    let file_size = bytes.len() as i64;
+
     {
         let guard = db.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?;
         guard.update_task(&task.id, "done", Some(&output.to_string()), None, None)?;
+
+        // Record the generated asset in the assets table
+        let asset = AssetRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            project_id: task.project_id.clone(),
+            task_id: Some(task.id.clone()),
+            asset_type: "image".to_string(),
+            file_path: asset_path.to_string_lossy().to_string(),
+            file_name: filename.clone(),
+            prompt: Some(prompt.to_string()),
+            model: Some(model.to_string()),
+            width: Some(width as i32),
+            height: Some(height as i32),
+            file_size: Some(file_size),
+            source: "generated".to_string(),
+            created_at: task.created_at.clone(),
+        };
+        if let Err(e) = guard.insert_asset(&asset) {
+            error!(task_id = %task.id, "failed to insert asset record: {e:#}");
+        }
     }
 
     Ok(())

@@ -13,8 +13,8 @@ use tauri::Manager;
 use tracing::info;
 
 use ark::ArkClient;
-use db::Db;
-use tasks::{ImageParams, TaskQueue, VideoParams};
+use db::{Db, SharedDb};
+use tasks::{ImageParams, TaskQueue, UserDefaults, VideoParams};
 
 // ---------------------------------------------------------------------------
 // App state managed by Tauri
@@ -22,6 +22,7 @@ use tasks::{ImageParams, TaskQueue, VideoParams};
 
 struct AppState {
     task_queue: Arc<TaskQueue>,
+    db: SharedDb,
 }
 
 // ---------------------------------------------------------------------------
@@ -38,6 +39,10 @@ struct Settings {
     base_url: String,
     #[serde(default)]
     model: String,
+    #[serde(default)]
+    default_image_model: Option<String>,
+    #[serde(default)]
+    default_video_model: Option<String>,
 }
 
 fn default_base_url() -> String {
@@ -50,6 +55,8 @@ impl Default for Settings {
             api_key: String::new(),
             base_url: default_base_url(),
             model: String::new(),
+            default_image_model: None,
+            default_video_model: None,
         }
     }
 }
@@ -152,6 +159,264 @@ async fn task_status(
             "status": "not_found",
         })),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Asset & Usage commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_assets(
+    state: tauri::State<'_, AppState>,
+    project_id: Option<String>,
+    asset_type: Option<String>,
+    query: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<db::AssetRow>, String> {
+    let db = state.db.lock().map_err(|e| format!("db lock: {e}"))?;
+    db.list_assets(
+        project_id.as_deref(),
+        asset_type.as_deref(),
+        query.as_deref(),
+        limit.unwrap_or(50),
+        offset.unwrap_or(0),
+    )
+    .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn get_asset_stats(
+    state: tauri::State<'_, AppState>,
+) -> Result<db::AssetStats, String> {
+    let db = state.db.lock().map_err(|e| format!("db lock: {e}"))?;
+    db.get_asset_stats().map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn register_imported_asset(
+    state: tauri::State<'_, AppState>,
+    project_id: String,
+    file_path: String,
+    file_name: String,
+    asset_type: String,
+) -> Result<serde_json::Value, String> {
+    let file_size = std::fs::metadata(&file_path).ok().map(|m| m.len() as i64);
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let asset = db::AssetRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        project_id,
+        task_id: None,
+        asset_type,
+        file_path,
+        file_name,
+        prompt: None,
+        model: None,
+        width: None,
+        height: None,
+        file_size,
+        source: "imported".to_string(),
+        created_at: now,
+    };
+
+    let db = state.db.lock().map_err(|e| format!("db lock: {e}"))?;
+    db.insert_asset(&asset).map_err(|e| format!("{e:#}"))?;
+
+    Ok(serde_json::json!({ "id": asset.id }))
+}
+
+#[tauri::command]
+async fn get_usage_stats(
+    state: tauri::State<'_, AppState>,
+) -> Result<db::UsageStats, String> {
+    let db = state.db.lock().map_err(|e| format!("db lock: {e}"))?;
+    db.get_usage_stats().map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn get_data_dir_info(
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve data dir: {e}"))?;
+    let db_path = data_dir.join("seedcanvas.db");
+    let db_size = std::fs::metadata(&db_path).ok().map(|m| m.len()).unwrap_or(0);
+
+    Ok(serde_json::json!({
+        "dataDir": data_dir.to_string_lossy(),
+        "dbSize": db_size,
+    }))
+}
+
+/// Delete SQLite data associated with a project.
+/// When `keep_assets` is true, only tasks are deleted (asset records remain to track files on disk).
+#[tauri::command]
+async fn delete_project_data(
+    state: tauri::State<'_, AppState>,
+    project_id: String,
+    keep_assets: Option<bool>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| format!("db lock: {e}"))?;
+    if keep_assets.unwrap_or(false) {
+        db.delete_tasks_by_project(&project_id).map_err(|e| format!("{e:#}"))
+    } else {
+        db.delete_all_project_data(&project_id).map_err(|e| format!("{e:#}"))
+    }
+}
+
+#[tauri::command]
+async fn reveal_data_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve data dir: {e}"))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&data_dir)
+            .spawn()
+            .map_err(|e| format!("failed to open Finder: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&data_dir)
+            .spawn()
+            .map_err(|e| format!("failed to open file manager: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&data_dir)
+            .spawn()
+            .map_err(|e| format!("failed to open Explorer: {e}"))?;
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Orphan project cleanup
+// ---------------------------------------------------------------------------
+
+/// An orphan directory found in projects/ that isn't tracked in projects.json.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OrphanProject {
+    id: String,
+    path: String,
+    has_manifest: bool,
+    has_assets: bool,
+    size_bytes: u64,
+}
+
+/// Scan projects/ directory for subdirectories not tracked in projects.json.
+#[tauri::command]
+async fn scan_orphan_projects(app: tauri::AppHandle) -> Result<Vec<OrphanProject>, String> {
+    let data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("failed to resolve data dir: {e}"))?;
+    let projects_dir = data_dir.join("projects");
+
+    // Read projects.json to find tracked project IDs
+    let index_path = data_dir.join("projects.json");
+    let tracked_ids: std::collections::HashSet<String> = match std::fs::read_to_string(&index_path) {
+        Ok(contents) => {
+            serde_json::from_str::<Vec<serde_json::Value>>(&contents)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|v| v["id"].as_str().map(String::from))
+                .collect()
+        }
+        Err(_) => std::collections::HashSet::new(),
+    };
+
+    let mut orphans = Vec::new();
+    let entries = std::fs::read_dir(&projects_dir).map_err(|e| format!("{e}"))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        if tracked_ids.contains(&dir_name) {
+            continue;
+        }
+
+        // This directory is an orphan
+        let has_manifest = path.join("manifest.json").exists();
+        let has_assets = path.join("assets").is_dir();
+        let size_bytes = dir_size(&path);
+
+        orphans.push(OrphanProject {
+            id: dir_name,
+            path: path.to_string_lossy().to_string(),
+            has_manifest,
+            has_assets,
+            size_bytes,
+        });
+    }
+
+    Ok(orphans)
+}
+
+/// Delete specified orphan project directories and their SQLite data.
+#[tauri::command]
+async fn cleanup_orphan_projects(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project_ids: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("failed to resolve data dir: {e}"))?;
+    let projects_dir = data_dir.join("projects");
+
+    let mut deleted = 0u32;
+    let mut errors = Vec::new();
+
+    for id in &project_ids {
+        // Delete SQLite data (tasks + assets)
+        if let Ok(db) = state.db.lock() {
+            let _ = db.delete_all_project_data(id);
+        }
+
+        // Delete the directory on disk
+        let dir = projects_dir.join(id);
+        if dir.is_dir() {
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => deleted += 1,
+                Err(e) => errors.push(format!("{id}: {e}")),
+            }
+        } else {
+            deleted += 1; // Already gone
+        }
+    }
+
+    Ok(serde_json::json!({ "deleted": deleted, "errors": errors }))
+}
+
+/// Recursively compute directory size in bytes.
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size(&p);
+            } else if let Ok(meta) = p.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }
 
 // ---------------------------------------------------------------------------
@@ -291,9 +556,20 @@ pub fn run() {
             let settings = load_settings(&data_dir);
             info!(base_url = %settings.base_url, "loaded settings");
 
-            // Open SQLite database
+            // Open SQLite database (shared handle)
             let db_path = data_dir.join("seedcanvas.db");
             let db = Db::open(&db_path).expect("failed to open database");
+            let shared_db: SharedDb = Arc::new(std::sync::Mutex::new(db));
+
+            // Backfill asset records from existing tasks
+            {
+                let guard = shared_db.lock().expect("db lock for backfill");
+                match guard.backfill_assets_from_tasks() {
+                    Ok(0) => {}
+                    Ok(n) => info!(count = n, "backfilled asset records from existing tasks"),
+                    Err(e) => tracing::error!("asset backfill failed: {e:#}"),
+                }
+            }
 
             // Create ARK client
             let ark = ArkClient::new(settings.base_url, settings.api_key);
@@ -302,14 +578,27 @@ pub fn run() {
             let projects_dir = data_dir.join("projects");
             std::fs::create_dir_all(&projects_dir)?;
 
-            // Create task queue and resume any interrupted tasks
-            let task_queue = TaskQueue::new(db, ark, app.handle().clone(), projects_dir);
+            // Build user defaults from settings
+            let user_defaults = UserDefaults {
+                default_image_model: settings.default_image_model,
+                default_video_model: settings.default_video_model,
+            };
+
+            // Create task queue with shared DB and resume any interrupted tasks
+            let task_queue = TaskQueue::new_with_shared(
+                Arc::clone(&shared_db),
+                ark,
+                app.handle().clone(),
+                projects_dir,
+                user_defaults,
+            );
             if let Err(e) = task_queue.resume_running_tasks() {
                 tracing::error!("failed to resume running tasks: {e:#}");
             }
 
             app.manage(AppState {
                 task_queue: Arc::new(task_queue),
+                db: shared_db,
             });
 
             // Start the Unix socket bridge for MCP binary communication
@@ -330,6 +619,15 @@ pub fn run() {
             generate_image,
             generate_video,
             task_status,
+            list_assets,
+            get_asset_stats,
+            register_imported_asset,
+            get_usage_stats,
+            get_data_dir_info,
+            delete_project_data,
+            reveal_data_dir,
+            scan_orphan_projects,
+            cleanup_orphan_projects,
             resolve_mcp_binary_path,
             check_mcp_config,
             inject_mcp_config,

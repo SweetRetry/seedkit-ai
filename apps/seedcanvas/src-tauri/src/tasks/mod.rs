@@ -84,11 +84,14 @@ pub struct ImageParams {
 
 impl ImageParams {
     /// Apply defaults and validate. Called before enqueueing.
-    pub fn normalize(&mut self) -> Result<()> {
+    /// `user_default_model` comes from the user's settings.json.
+    pub fn normalize(&mut self, user_default_model: Option<&str>) -> Result<()> {
         if self.prompt.trim().is_empty() {
             bail!("prompt must not be empty");
         }
-        let model = self.model.get_or_insert_with(|| DEFAULT_IMAGE_MODEL.into());
+        let model = self.model.get_or_insert_with(|| {
+            user_default_model.unwrap_or(DEFAULT_IMAGE_MODEL).to_string()
+        });
         if !IMAGE_MODELS.contains(&model.as_str()) {
             bail!("invalid image model \"{model}\". Valid: {}", IMAGE_MODELS.join(", "));
         }
@@ -113,11 +116,14 @@ pub struct VideoParams {
 
 impl VideoParams {
     /// Apply defaults and validate. Called before enqueueing.
-    pub fn normalize(&mut self) -> Result<()> {
+    /// `user_default_model` comes from the user's settings.json.
+    pub fn normalize(&mut self, user_default_model: Option<&str>) -> Result<()> {
         if self.prompt.trim().is_empty() {
             bail!("prompt must not be empty");
         }
-        let model = self.model.get_or_insert_with(|| DEFAULT_VIDEO_MODEL.into());
+        let model = self.model.get_or_insert_with(|| {
+            user_default_model.unwrap_or(DEFAULT_VIDEO_MODEL).to_string()
+        });
         if !VIDEO_MODELS.contains(&model.as_str()) {
             bail!("invalid video model \"{model}\". Valid: {}", VIDEO_MODELS.join(", "));
         }
@@ -141,45 +147,56 @@ impl VideoParams {
 // TaskQueue — owns Db + ArkClient, spawns async work
 // ---------------------------------------------------------------------------
 
+/// User-configured default models from settings.json.
+#[derive(Debug, Clone, Default)]
+pub struct UserDefaults {
+    pub default_image_model: Option<String>,
+    pub default_video_model: Option<String>,
+}
+
 pub struct TaskQueue {
     db: SharedDb,
     ark: Arc<ArkClient>,
     app_handle: Option<AppHandle>,
     projects_dir: PathBuf,
     on_complete: Option<OnCompleteCallback>,
+    user_defaults: UserDefaults,
 }
 
 impl TaskQueue {
     /// Create a TaskQueue with a Tauri AppHandle (normal app mode).
-    pub fn new(db: Db, ark: ArkClient, app_handle: AppHandle, projects_dir: PathBuf) -> Self {
+    pub fn new(db: Db, ark: ArkClient, app_handle: AppHandle, projects_dir: PathBuf, user_defaults: UserDefaults) -> Self {
         Self {
             db: Arc::new(std::sync::Mutex::new(db)),
             ark: Arc::new(ark),
             app_handle: Some(app_handle),
             projects_dir,
             on_complete: None,
+            user_defaults,
         }
     }
 
     /// Create a TaskQueue without a Tauri AppHandle (headless MCP mode).
-    pub fn new_headless(db: Db, ark: ArkClient, projects_dir: PathBuf) -> Self {
+    pub fn new_headless(db: Db, ark: ArkClient, projects_dir: PathBuf, user_defaults: UserDefaults) -> Self {
         Self {
             db: Arc::new(std::sync::Mutex::new(db)),
             ark: Arc::new(ark),
             app_handle: None,
             projects_dir,
             on_complete: None,
+            user_defaults,
         }
     }
 
     /// Create a TaskQueue with a pre-wrapped SharedDb (used when DB is shared across subsystems).
-    pub fn new_with_shared(db: SharedDb, ark: ArkClient, app_handle: AppHandle, projects_dir: PathBuf) -> Self {
+    pub fn new_with_shared(db: SharedDb, ark: ArkClient, app_handle: AppHandle, projects_dir: PathBuf, user_defaults: UserDefaults) -> Self {
         Self {
             db,
             ark: Arc::new(ark),
             app_handle: Some(app_handle),
             projects_dir,
             on_complete: None,
+            user_defaults,
         }
     }
 
@@ -191,7 +208,8 @@ impl TaskQueue {
 
     /// Submit an image generation task. Returns the task ID immediately.
     pub fn submit_image(&self, mut params: ImageParams) -> Result<String> {
-        params.normalize()?;
+        params.normalize(self.user_defaults.default_image_model.as_deref())?;
+        self.validate_project_exists(&params.project_id)?;
         let project_id = params.project_id.clone();
         let task = self.create_task_row(&project_id, "image", &params)?;
         let task_id = task.id.clone();
@@ -202,7 +220,8 @@ impl TaskQueue {
 
     /// Submit a video generation task. Returns the task ID immediately.
     pub fn submit_video(&self, mut params: VideoParams) -> Result<String> {
-        params.normalize()?;
+        params.normalize(self.user_defaults.default_video_model.as_deref())?;
+        self.validate_project_exists(&params.project_id)?;
         let project_id = params.project_id.clone();
         let task = self.create_task_row(&project_id, "video", &params)?;
         let task_id = task.id.clone();
@@ -242,6 +261,18 @@ impl TaskQueue {
     // -----------------------------------------------------------------------
     // Internals
     // -----------------------------------------------------------------------
+
+    /// Reject tasks for non-existent projects to prevent orphan directory creation.
+    fn validate_project_exists(&self, project_id: &str) -> Result<()> {
+        let manifest = self.projects_dir.join(project_id).join("manifest.json");
+        if !manifest.exists() {
+            bail!(
+                "project \"{project_id}\" does not exist (no manifest.json found). \
+                 Create the project first before generating assets."
+            );
+        }
+        Ok(())
+    }
 
     fn emit_submitted(&self, task_id: &str, project_id: &str, task_type: &str) {
         if let Some(ref handle) = self.app_handle {

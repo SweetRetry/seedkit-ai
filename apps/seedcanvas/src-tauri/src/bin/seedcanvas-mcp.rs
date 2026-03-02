@@ -15,7 +15,7 @@ use tracing::info;
 use seedcanvas_lib::ark::ArkClient;
 use seedcanvas_lib::db::Db;
 use seedcanvas_lib::mcp::{CanvasIpcRequest, SeedCanvasMcp};
-use seedcanvas_lib::tasks::TaskQueue;
+use seedcanvas_lib::tasks::{TaskQueue, UserDefaults};
 
 // ---------------------------------------------------------------------------
 // Settings — mirrors lib.rs but avoids pulling in Tauri types
@@ -29,6 +29,10 @@ struct Settings {
     #[serde(default = "default_base_url")]
     #[serde(alias = "baseURL")]
     base_url: String,
+    #[serde(default)]
+    default_image_model: Option<String>,
+    #[serde(default)]
+    default_video_model: Option<String>,
 }
 
 fn default_base_url() -> String {
@@ -40,6 +44,8 @@ impl Default for Settings {
         Self {
             api_key: String::new(),
             base_url: default_base_url(),
+            default_image_model: None,
+            default_video_model: None,
         }
     }
 }
@@ -162,8 +168,14 @@ async fn main() -> Result<()> {
     let projects_dir = data_dir.join("projects");
     std::fs::create_dir_all(&projects_dir)?;
 
+    // Build user defaults from settings
+    let user_defaults = UserDefaults {
+        default_image_model: settings.default_image_model,
+        default_video_model: settings.default_video_model,
+    };
+
     // Create headless task queue (no AppHandle — events won't emit to frontend)
-    let mut task_queue = TaskQueue::new_headless(db, ark, projects_dir);
+    let mut task_queue = TaskQueue::new_headless(db, ark, projects_dir, user_defaults);
 
     // Try connecting to the running SeedCanvas app via Unix socket
     let sock_path = data_dir.join("mcp.sock");
