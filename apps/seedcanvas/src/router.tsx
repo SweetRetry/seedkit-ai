@@ -30,6 +30,9 @@ const canvasRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/canvas/$projectId",
   component: CanvasLayout,
+  validateSearch: (search: Record<string, unknown>) => ({
+    firstRun: search.firstRun === true || search.firstRun === "true",
+  }),
 })
 
 // ---------------------------------------------------------------------------

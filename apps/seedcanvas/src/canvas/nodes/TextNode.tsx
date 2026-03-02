@@ -5,6 +5,11 @@ import { useCanvasStore } from "../store"
 import type { CanvasNodeData } from "../types"
 import { NodeShell } from "./NodeShell"
 
+function autoResize(el: HTMLTextAreaElement) {
+  el.style.height = "auto"
+  el.style.height = `${el.scrollHeight}px`
+}
+
 export function TextNode({ data, selected }: NodeProps) {
   const nodeId = useNodeId() as string
   const nodeData = data as CanvasNodeData
@@ -21,6 +26,7 @@ export function TextNode({ data, selected }: NodeProps) {
     if (editing && textareaRef.current) {
       textareaRef.current.focus()
       textareaRef.current.select()
+      autoResize(textareaRef.current)
     }
   }, [editing])
 
@@ -58,11 +64,14 @@ export function TextNode({ data, selected }: NodeProps) {
           <textarea
             ref={textareaRef}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value)
+              autoResize(e.target)
+            }}
             onBlur={commitEdit}
             onKeyDown={handleKeyDown}
             className="nodrag nowheel w-full resize-none bg-transparent text-sm leading-relaxed outline-none"
-            rows={Math.max(2, draft.split("\n").length)}
+            style={{ overflow: "hidden" }}
           />
         ) : (
           <p className="whitespace-pre-wrap text-sm leading-relaxed text-card-foreground/80">

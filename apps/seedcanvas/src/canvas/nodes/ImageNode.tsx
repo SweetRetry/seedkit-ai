@@ -1,14 +1,26 @@
+import { convertFileSrc } from "@tauri-apps/api/core"
 import type { NodeProps } from "@xyflow/react"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import type { CanvasNodeData } from "../types"
 import { NodeShell } from "./NodeShell"
+
+/** Convert a raw URL to one the WebView can display. */
+function resolveImageSrc(raw: string): string {
+  // Already an asset:// or http(s):// URL — use as-is
+  if (raw.startsWith("asset://") || raw.startsWith("http://") || raw.startsWith("https://")) {
+    return raw
+  }
+  // Local absolute path — convert via Tauri asset protocol
+  return convertFileSrc(raw)
+}
 
 export function ImageNode({ data, selected }: NodeProps) {
   const nodeData = data as CanvasNodeData
   const latestImage = nodeData.historys.find((h) => h.result.type === "image")
   const [error, setError] = useState(false)
 
-  const src = latestImage?.result.type === "image" ? latestImage.result.url : null
+  const rawUrl = latestImage?.result.type === "image" ? latestImage.result.url : null
+  const src = useMemo(() => (rawUrl ? resolveImageSrc(rawUrl) : null), [rawUrl])
 
   return (
     <NodeShell selected={selected} label={nodeData.uiInfo.title}>

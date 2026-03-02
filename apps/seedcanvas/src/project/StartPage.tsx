@@ -2,9 +2,11 @@ import { useNavigate } from "@tanstack/react-router"
 import { LayoutGrid, Plus, Sparkles, Trash2 } from "lucide-react"
 import { motion } from "motion/react"
 import { useCallback, useEffect, useState } from "react"
+import { OnboardingDialog } from "@/components/OnboardingDialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { assetUrl } from "@/lib/fs"
+import { invoke } from "@tauri-apps/api/core"
 import { createProject, deleteProject, listRecentProjects } from "../lib/project"
 import type { RecentProject } from "./types"
 
@@ -128,6 +130,7 @@ export function StartPage() {
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([])
   const [newName, setNewName] = useState("")
   const [creating, setCreating] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
 
   const refreshProjects = useCallback(async () => {
     const projects = await listRecentProjects()
@@ -136,14 +139,30 @@ export function StartPage() {
 
   useEffect(() => {
     refreshProjects()
+    // Show onboarding if MCP is not configured
+    invoke<{ configured: boolean }>("check_mcp_config").then((status) => {
+      if (!status.configured) setOnboardingOpen(true)
+    }).catch(() => {
+      // Ignore — don't block the UI
+    })
   }, [refreshProjects])
+
+  const handleOnboardingComplete = useCallback(async () => {
+    setOnboardingOpen(false)
+    const { id } = await createProject("My First Canvas")
+    navigate({
+      to: "/canvas/$projectId",
+      params: { projectId: id },
+      search: { firstRun: true },
+    })
+  }, [navigate])
 
   const handleCreate = useCallback(async () => {
     const name = newName.trim() || "Untitled"
     setCreating(true)
     try {
       const { id } = await createProject(name)
-      navigate({ to: "/canvas/$projectId", params: { projectId: id } })
+      navigate({ to: "/canvas/$projectId", params: { projectId: id }, search: { firstRun: false } })
     } finally {
       setCreating(false)
     }
@@ -151,7 +170,7 @@ export function StartPage() {
 
   const handleOpen = useCallback(
     (id: string) => {
-      navigate({ to: "/canvas/$projectId", params: { projectId: id } })
+      navigate({ to: "/canvas/$projectId", params: { projectId: id }, search: { firstRun: false } })
     },
     [navigate]
   )
@@ -236,6 +255,12 @@ export function StartPage() {
           <EmptyState onCreate={handleCreate} />
         )}
       </div>
+
+      <OnboardingDialog
+        open={onboardingOpen}
+        onOpenChange={setOnboardingOpen}
+        onComplete={handleOnboardingComplete}
+      />
     </div>
   )
 }

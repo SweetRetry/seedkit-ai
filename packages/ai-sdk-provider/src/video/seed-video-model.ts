@@ -21,7 +21,6 @@ import {
 } from './seed-video-options';
 
 export type SeedVideoModelId =
-  | 'doubao-seedance-2-0-pro-250528'
   | 'doubao-seedance-1-5-pro-251215'
   | 'doubao-seedance-1-0-pro-250528'
   | 'doubao-seedance-1-0-pro-fast-251015'

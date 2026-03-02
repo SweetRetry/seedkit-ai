@@ -80,8 +80,8 @@ describe('SeedVideoModel', () => {
     });
 
     it('supports custom model IDs', () => {
-      const model = createModel(undefined, 'doubao-seedance-2-0-pro-250528');
-      expect(model.modelId).toBe('doubao-seedance-2-0-pro-250528');
+      const model = createModel(undefined, 'doubao-seedance-1-5-pro-251215');
+      expect(model.modelId).toBe('doubao-seedance-1-5-pro-251215');
     });
   });
 

@@ -14,6 +14,7 @@ import {
   loadProject,
   saveCanvas as saveCanvasOnDisk,
 } from "../lib/project"
+import { type BatchOp, type BatchResult, executeBatch } from "./batch-ops"
 import type {
   CanvasEdge,
   CanvasFile,
@@ -23,6 +24,9 @@ import type {
   HistoryEntry,
 } from "./types"
 import { MAX_HISTORYS } from "./types"
+
+// Re-export so existing consumers don't break
+export type { BatchOp, BatchResult }
 
 export interface CanvasState {
   // Project
@@ -49,9 +53,13 @@ export interface CanvasState {
   // Node CRUD
   addNode: (node: CanvasNode) => void
   updateNodeData: (nodeId: string, data: Record<string, unknown>) => void
+  updateNodeStyle: (nodeId: string, style: Record<string, unknown>) => void
   pushHistory: (nodeId: string, entry: HistoryEntry) => void
   deleteNodes: (nodeIds: string[]) => void
   deleteEdges: (edgeIds: string[]) => void
+
+  // Batch operations (atomic, snapshot/rollback)
+  batchApply: (operations: BatchOp[]) => BatchResult
 
   // Project persistence
   openProject: (id: string) => Promise<void>
@@ -112,6 +120,14 @@ export const useCanvasStore = create<CanvasState>()(
         isDirty: true,
       }),
 
+    updateNodeStyle: (nodeId, style) =>
+      set({
+        nodes: get().nodes.map((n) =>
+          n.id === nodeId ? { ...n, style: { ...n.style, ...style } } : n
+        ),
+        isDirty: true,
+      }),
+
     pushHistory: (nodeId, entry) =>
       set({
         nodes: get().nodes.map((n) => {
@@ -137,6 +153,21 @@ export const useCanvasStore = create<CanvasState>()(
         edges: get().edges.filter((e) => !idSet.has(e.id)),
         isDirty: true,
       })
+    },
+
+    // Batch — delegate to pure function, commit or rollback
+    batchApply: (operations) => {
+      try {
+        const { nodes, edges, results } = executeBatch(operations, {
+          nodes: [...get().nodes],
+          edges: [...get().edges],
+          viewport: get().viewport,
+        })
+        set({ nodes, edges, isDirty: true })
+        return { ok: true, results }
+      } catch (e) {
+        return { ok: false, results: [], error: e instanceof Error ? e.message : String(e) }
+      }
     },
 
     // Persistence

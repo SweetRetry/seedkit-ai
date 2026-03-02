@@ -24,7 +24,7 @@ export function NodeShell({ selected, label, children, className }: NodeShellPro
     <div
       className={cn(
         "group h-full w-full",
-        "rounded-xl border bg-card text-card-foreground",
+        "rounded-xl border bg-card text-card-foreground flex flex-col",
         "shadow-md shadow-black/10",
         "transition-shadow duration-200",
         selected ? "ring-2 ring-primary/80 shadow-lg shadow-primary/5" : "hover:shadow-lg",

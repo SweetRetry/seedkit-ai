@@ -1,14 +1,23 @@
+import { convertFileSrc } from "@tauri-apps/api/core"
 import type { NodeProps } from "@xyflow/react"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import type { CanvasNodeData } from "../types"
 import { NodeShell } from "./NodeShell"
+
+function resolveMediaSrc(raw: string): string {
+  if (raw.startsWith("asset://") || raw.startsWith("http://") || raw.startsWith("https://")) {
+    return raw
+  }
+  return convertFileSrc(raw)
+}
 
 export function VideoNode({ data, selected }: NodeProps) {
   const nodeData = data as CanvasNodeData
   const latestVideo = nodeData.historys.find((h) => h.result.type === "video")
   const [error, setError] = useState(false)
 
-  const src = latestVideo?.result.type === "video" ? latestVideo.result.url : null
+  const rawUrl = latestVideo?.result.type === "video" ? latestVideo.result.url : null
+  const src = useMemo(() => (rawUrl ? resolveMediaSrc(rawUrl) : null), [rawUrl])
 
   return (
     <NodeShell selected={selected} label={nodeData.uiInfo.title}>

@@ -115,6 +115,7 @@ function CanvasInner() {
         deleteKeyCode={["Backspace", "Delete"]}
         selectNodesOnDrag
         selectionOnDrag
+        minZoom={0.3}
         selectionMode={SelectionMode.Partial}
         panOnDrag={false}
         panOnScroll
@@ -135,7 +136,7 @@ function CanvasInner() {
 
 export function Canvas() {
   return (
-    <div className="flex-1 h-full">
+    <div className="h-full w-full">
       <ReactFlowProvider>
         <CanvasInner />
       </ReactFlowProvider>

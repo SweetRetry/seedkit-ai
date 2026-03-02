@@ -35,18 +35,18 @@ interface UseAgentStreamOptions {
   skipConfirm: boolean;
   apiKey: string;
   dispatch: React.Dispatch<Action>;
-  stateRef: React.MutableRefObject<{ totalTokens: number }>;
+  stateRef: React.RefObject<{ totalTokens: number }>;
   context: AgentContext;
   mcpManager?: McpManager;
 }
 
 export interface AgentStream {
-  messages: React.MutableRefObject<ModelMessage[]>;
-  turnCount: React.MutableRefObject<number>;
-  inFlight: React.MutableRefObject<boolean>;
-  abortRef: React.MutableRefObject<boolean>;
-  abortControllerRef: React.MutableRefObject<AbortController | null>;
-  taskStore: React.MutableRefObject<ReturnType<typeof createTaskStore>>;
+  messages: React.RefObject<ModelMessage[]>;
+  turnCount: React.RefObject<number>;
+  inFlight: React.RefObject<boolean>;
+  abortRef: React.RefObject<boolean>;
+  abortControllerRef: React.RefObject<AbortController | null>;
+  taskStore: React.RefObject<ReturnType<typeof createTaskStore>>;
   runStream: (cfg: Config) => Promise<void>;
   runCompact: (cfg: Config) => Promise<void>;
 }
