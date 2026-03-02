@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core"
 import { Check, CircleAlert, ClipboardCopy, Loader2 } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { checkMcpConfig, injectMcpConfig, resolveMcpBinaryPath } from "@/lib/commands"
 import {
   Dialog,
   DialogContent,
@@ -41,17 +41,14 @@ export function OnboardingDialog({
 
     async function probe() {
       try {
-        const path = await invoke<string>("resolve_mcp_binary_path")
+        const path = await resolveMcpBinaryPath()
         if (!cancelled) setBinaryPath(path)
       } catch {
         if (!cancelled) setBinaryPath("")
       }
 
       try {
-        const status = await invoke<{
-          configured: boolean
-          currentPath: string | null
-        }>("check_mcp_config")
+        const status = await checkMcpConfig()
         if (!cancelled) {
           setMcpConfigured(status.configured)
           setMcpCurrentPath(status.currentPath)
@@ -90,7 +87,7 @@ export function OnboardingDialog({
     setInjecting(true)
     setMcpError(null)
     try {
-      await invoke("inject_mcp_config", { binaryPath })
+      await injectMcpConfig(binaryPath)
       setInjected(true)
       setMcpConfigured(true)
     } catch (e) {

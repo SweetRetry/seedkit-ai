@@ -1,6 +1,7 @@
 import { join } from "@tauri-apps/api/path"
 import type { CanvasNode } from "../canvas/types"
 import { assetUrl, getProjectDir, importAsset } from "./fs"
+import { registerImportedAsset } from "./commands"
 import { generateId } from "./id"
 
 function getExtension(filePath: string): string {
@@ -18,6 +19,9 @@ export async function importImageFile(
   const projectDir = await getProjectDir(projectId)
   const absPath = await join(projectDir, "assets", assetFileName)
   const url = assetUrl(absPath)
+
+  // Register in asset DB for global browsing
+  registerImportedAsset(projectId, absPath, assetFileName, "image").catch(() => {})
 
   const initWidth = Math.max(300, 250)
   const initHeight = Math.max(200, 250)
@@ -51,6 +55,9 @@ export async function importVideoFile(
   const projectDir = await getProjectDir(projectId)
   const absPath = await join(projectDir, "assets", assetFileName)
   const url = assetUrl(absPath)
+
+  // Register in asset DB for global browsing
+  registerImportedAsset(projectId, absPath, assetFileName, "video").catch(() => {})
 
   const initWidth = Math.max(400, 250)
   const initHeight = Math.max(300, 250)

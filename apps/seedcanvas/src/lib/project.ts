@@ -2,6 +2,7 @@ import { join } from "@tauri-apps/api/path"
 import { remove } from "@tauri-apps/plugin-fs"
 import type { CanvasFile } from "../canvas/types"
 import type { ProjectManifest, RecentProject } from "../project/types"
+import { deleteProjectData } from "./commands"
 import { ensureDir, getDataDir, getProjectDir, readJson, writeJson } from "./fs"
 import { generateId } from "./id"
 
@@ -132,14 +133,31 @@ export async function updateProjectCover(id: string, coverPath: string): Promise
   }
 }
 
-export async function deleteProject(id: string): Promise<void> {
+export async function deleteProject(
+  id: string,
+  options: { keepAssets?: boolean } = {}
+): Promise<void> {
   const projectDir = await getProjectDir(id)
 
-  try {
-    await remove(projectDir, { recursive: true })
-  } catch {
-    // Directory may already be gone
+  if (options.keepAssets) {
+    // Delete everything except the assets/ subdirectory
+    const manifestPath = await join(projectDir, "manifest.json")
+    const canvasPath = await join(projectDir, "canvas.json")
+    const coverPath = await join(projectDir, "cover.png")
+    for (const f of [manifestPath, canvasPath, coverPath]) {
+      try { await remove(f) } catch { /* may not exist */ }
+    }
+  } else {
+    try {
+      await remove(projectDir, { recursive: true })
+    } catch {
+      // Directory may already be gone
+    }
   }
+
+  // Cleanup SQLite data for this project
+  // When keeping assets, preserve asset DB records so files remain trackable
+  deleteProjectData(id, options.keepAssets ?? false).catch(() => {})
 
   const projects = await listRecentProjects()
   const filtered = projects.filter((p) => p.id !== id)
